@@ -105,7 +105,7 @@ def summarize_news(news_items):
             client = genai.Client(api_key=GEMINI_API_KEY)
             # 使用 1.5 Flash
             response = client.models.generate_content(
-                model="gemini-1.5-flash", 
+                model="gemini-2.5-flash", 
                 contents=prompt
             )
             return response.text
