@@ -78,7 +78,7 @@ def summarize_news(news_items):
     if DEEPSEEK_API_KEY:
         print("🤖 检测到 DeepSeek Key，正在调用 DeepSeek-V3 进行总结...")
         try:
-            client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+            client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1")
             response = client.chat.completions.create(
                 model="deepseek-chat",  # DeepSeek V3
                 messages=[
@@ -100,7 +100,7 @@ def summarize_news(news_items):
             client = genai.Client(api_key=GEMINI_API_KEY)
             # 使用最稳的 1.5 Flash
             response = client.models.generate_content(
-                model="gemini-1.5-flash", 
+                model="gemini-2.5-flash", 
                 contents=prompt
             )
             return response.text
