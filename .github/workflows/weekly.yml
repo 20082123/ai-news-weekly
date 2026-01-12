@@ -1,0 +1,33 @@
+name: Send AI Weekly News
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # 每周一北京时间上午 8:00 (UTC 0:00)
+  workflow_dispatch:    # 允许手动按钮触发
+
+jobs:
+  build-and-send:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run script
+        env:
+          # 映射 GitHub Secrets 到 环境变量
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          TEST_MODE: "False" # 在服务器上强制关闭测试模式，使用真实搜索
+        run: python main.py
