@@ -85,7 +85,7 @@ def summarize_news(news_items):
         # 2. 生成内容 (注意方法名变化: models.generate_content)
         # 尝试使用 3.0 Flash，如果您的 Key 权限受限，可回退到 gemini-2.0-flash
         response = client.models.generate_content(
-            model="gemini-3.0-flash", 
+            model="gemini-2.5-flash", 
             contents=prompt
         )
         
