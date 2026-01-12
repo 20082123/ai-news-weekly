@@ -4,17 +4,18 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
-# --- 新版 SDK 导入 ---
-from google import genai
+# --- 导入 SDK ---
+from google import genai           # Gemini SDK
+from openai import OpenAI          # DeepSeek 使用 OpenAI SDK 兼容
 from tavily import TavilyClient
 
 # ================= 配置区 =================
-# 调试开关：True = 使用假数据，False = 真实搜索
 TEST_MODE = os.getenv("TEST_MODE", "False").lower() == "true"
 
-# 获取 API Keys
+# 获取 Keys
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") # 新增
 
 # 邮件配置 (163邮箱)
 EMAIL_HOST = "smtp.163.com"
@@ -26,11 +27,9 @@ EMAIL_TO = os.getenv("EMAIL_TO")
 # ================= 核心函数 =================
 
 def get_mock_news():
-    """返回假数据用于测试"""
-    print("⚠️ 正在运行测试模式，使用模拟数据...")
     return [
-        {"title": "Gemini 3.0 发布", "url": "https://google.com/news1", "content": "Google 发布了最新的 Gemini 3.0 Flash 模型..."},
-        {"title": "DeepMind 新突破", "url": "https://deepmind.com/news", "content": "AI 在科学研究领域取得新进展..."}
+        {"title": "DeepSeek V3 发布", "url": "https://deepseek.com", "content": "国产之光 DeepSeek 发布 V3 模型，性能强悍..."},
+        {"title": "GitHub Copilot 更新", "url": "https://github.com", "content": "Copilot 现在支持更多语言..."}
     ]
 
 def search_news(query):
@@ -46,7 +45,7 @@ def search_news(query):
             search_depth="basic",
             topic="news",
             days=7,
-            max_results=7,
+            max_results=10, # 稍微增加一点数量
             include_raw_content=False
         )
         return response.get('results', [])
@@ -55,12 +54,10 @@ def search_news(query):
         return []
 
 def summarize_news(news_items):
-    """使用 Gemini 3.0 Flash 总结 (新版 SDK)"""
+    """智能总结：优先 DeepSeek，备用 Gemini"""
     if not news_items:
         return "本周没有找到相关新闻。"
 
-    print("🤖 正在调用 Gemini 3.0 Flash 进行总结...")
-    
     # 构建 Prompt
     news_content = "\n".join([f"- [{item['title']}]({item['url']}): {item['content']}" for item in news_items])
     
@@ -69,38 +66,54 @@ def summarize_news(news_items):
     
     【要求】
     1. 标题清晰，分为【重磅头条】、【技术前沿】、【行业动态】三部分。
-    2. 语言简练专业。
-    3. 每条新闻必须附带原文链接。
+    2. 语言简练专业，不要废话。
+    3. 必须保留原文链接。
     4. 结尾简述本周趋势。
 
     【新闻数据】
     {news_content}
     """
 
-    try:
-        # --- 新版 SDK 调用逻辑 (2026) ---
-        # 1. 初始化客户端
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        # 2. 生成内容 (注意方法名变化: models.generate_content)
-        # 尝试使用 3.0 Flash，如果您的 Key 权限受限，可回退到 gemini-2.0-flash
-        response = client.models.generate_content(
-            model="gemini-2.5-flash", 
-            contents=prompt
-        )
-        
-        # 3. 获取文本 (直接 .text)
-        return response.text
-        
-    except Exception as e:
-        print(f"❌ 总结失败: {e}")
-        return f"总结生成出错: {e}"
+    # --- 策略 A: 优先使用 DeepSeek ---
+    if DEEPSEEK_API_KEY:
+        print("🤖 检测到 DeepSeek Key，正在调用 DeepSeek-V3 进行总结...")
+        try:
+            client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+            response = client.chat.completions.create(
+                model="deepseek-chat",  # DeepSeek V3
+                messages=[
+                    {"role": "system", "content": "你是一个专业的科技媒体编辑。"},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"❌ DeepSeek 调用失败: {e}")
+            print("⚠️ 尝试切换回 Gemini...")
+            # 如果 DeepSeek 失败，不返回，继续往下走尝试 Gemini
+
+    # --- 策略 B: 备用 Gemini (保留原代码) ---
+    if GEMINI_API_KEY:
+        print("🤖 正在调用 Gemini (备用通道)...")
+        try:
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            # 使用最稳的 1.5 Flash
+            response = client.models.generate_content(
+                model="gemini-1.5-flash", 
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            print(f"❌ Gemini 调用失败: {e}")
+            return f"两大模型均调用失败。DeepSeek 错误已记录，Gemini 错误: {e}"
+    
+    return "❌ 未配置有效的 LLM API Key (DeepSeek 或 Gemini)。"
 
 def send_email(subject, body):
     """发送邮件"""
     if not EMAIL_USER or not EMAIL_PASS:
         print("⚠️ 未配置邮件账户，跳过发送。")
-        print(body)
         return
 
     msg = MIMEMultipart()
@@ -109,11 +122,11 @@ def send_email(subject, body):
     msg['Subject'] = subject
     
     html_content = f"""
-    <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; line-height: 1.6; color: #333;">
-        <h2 style="color: #2c3e50;">🤖 AI News Weekly</h2>
+    <div style="font-family: sans-serif; line-height: 1.6; color: #333;">
+        <h2 style="color: #4A90E2;">🤖 AI News Weekly</h2>
         <pre style="white-space: pre-wrap; font-family: inherit; font-size: 14px;">{body}</pre>
-        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-        <p style="font-size: 12px; color: #999;">Powered by Gemini 3.0 & GitHub Actions</p>
+        <hr style="margin: 20px 0;">
+        <p style="font-size: 12px; color: #888;">Generated by GitHub Actions & DeepSeek/Gemini</p>
     </div>
     """
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
