@@ -1,6 +1,7 @@
 import os
 import re
 import smtplib
+import time
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -77,28 +78,47 @@ def get_mock_news():
     ]
 
 
-def search_news(query):
-    """使用 Tavily 搜索 AI 新闻"""
+def search_news(queries):
+    """使用 Tavily 多关键词搜索 AI 新闻，合并去重"""
     if TEST_MODE:
         return get_mock_news()
 
-    print(f"[1/2] 正在调用 Tavily 搜索: {query}...")
-    try:
-        tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        response = tavily.search(
-            query=query,
-            search_depth="basic",
-            topic="news",
-            days=7,
-            max_results=10,
-            include_raw_content=False,
-        )
-        results = response.get("results", [])
-        print(f"  -> 获取到 {len(results)} 条新闻")
-        return results
-    except Exception as e:
-        print(f"  -> Tavily 搜索失败: {e}")
-        return []
+    if isinstance(queries, str):
+        queries = [queries]
+
+    all_results = []
+    seen_urls = set()
+
+    for query in queries:
+        print(f"  [Tavily] 搜索: {query}...")
+        for attempt in range(2):  # 每个查询最多重试2次
+            try:
+                tavily = TavilyClient(api_key=TAVILY_API_KEY)
+                response = tavily.search(
+                    query=query,
+                    search_depth="basic",
+                    topic="news",
+                    days=7,
+                    max_results=8,
+                    include_raw_content=False,
+                )
+                results = response.get("results", [])
+                for r in results:
+                    url = r.get("url", "")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_results.append(r)
+                print(f"    -> +{len(results)} 条 (累计 {len(all_results)} 条)")
+                break
+            except Exception as e:
+                if attempt == 0:
+                    print(f"    -> 失败，重试: {e}")
+                    time.sleep(2)
+                else:
+                    print(f"    -> 重试仍失败: {e}")
+
+    print(f"  [Tavily] 共获取 {len(all_results)} 条不重复新闻")
+    return all_results
 
 
 # ================= 数据获取：GitHub Trending =================
@@ -133,87 +153,188 @@ def is_ai_related(repo):
 
 
 def scrape_github_trending(since="weekly"):
-    """抓取 GitHub Trending 页面中 AI 相关项目"""
+    """抓取 GitHub Trending 页面中 AI 相关项目，多策略容错"""
     if TEST_MODE:
         return get_mock_github_trending()
 
     print(f"[2/2] 正在抓取 GitHub Trending ({since})...")
+
+    # 策略 A: 直接抓取 HTML 页面
+    repos = _scrape_github_html(since)
+
+    # 策略 B: HTML 抓取失败，尝试 GitHub API 搜索热门项目
+    if not repos:
+        print("  -> HTML 抓取失败，尝试 GitHub API 搜索...")
+        repos = _scrape_github_api(since)
+
+    if not repos:
+        print("  -> GitHub 数据获取全部失败")
+        return []
+
+    # AI 关键词过滤
+    ai_repos = [r for r in repos if is_ai_related(r)]
+    if len(ai_repos) < 5:
+        print(f"  -> AI 项目偏少({len(ai_repos)}个)，补充热门项目")
+        ai_repos = repos
+
+    print(f"  -> 获取到 {len(repos)} 个仓库，其中 {len([r for r in repos if is_ai_related(r)])} 个 AI 相关")
+    return ai_repos
+
+
+def _scrape_github_html(since="weekly"):
+    """策略 A: 直接抓取 GitHub Trending HTML 页面"""
     try:
         resp = requests.get(
             f"https://github.com/trending?since={since}",
             headers={
-                "User-Agent": "Mozilla/5.0 (compatible; AI-Weekly-Bot/1.0)",
-                "Accept": "text/html",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
             },
             timeout=15,
         )
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        repos = []
-        articles = soup.select("article.Box-row") or soup.select("article")
+        # 多种 selector 容错
+        articles = soup.select("article.Box-row")
+        if not articles:
+            articles = soup.select("article")
+        if not articles:
+            articles = soup.select('[data-testid="repository-card"]') or soup.select("section.Box")
 
+        if not articles:
+            print(f"  -> HTML 解析未找到仓库条目（页面结构可能变化）")
+            return []
+
+        repos = []
         for article in articles:
             try:
-                # 仓库名
-                h2 = article.select_one("h2 a")
-                if not h2:
-                    continue
-                href = h2.get("href", "").strip("/")
-                name = href.replace("/", "", 1) if href.startswith("/") else href
-
-                # 描述
-                desc_el = article.select_one("p")
-                description = desc_el.get_text(strip=True) if desc_el else ""
-
-                # 语言
-                lang_el = article.select_one('[itemprop="programmingLanguage"]')
-                language = lang_el.get_text(strip=True) if lang_el else ""
-
-                # 星数 - 找包含 "stars" 的链接
-                stars_gained = ""
-                total_stars = ""
-                star_links = article.select("a.Link--muted")
-                for link in star_links:
-                    href = link.get("href", "")
-                    text = link.get_text(strip=True).replace(",", "").replace("\n", "").strip()
-                    if "stargazers" in href:
-                        total_stars = text
-                    elif since in ("weekly", "monthly") and text:
-                        # 本周/月新增星数在最后一个 Link--muted 中
-                        pass
-
-                # 尝试从特定元素获取增长星数
-                # GitHub trending 页面格式: "X,XXX stars this week"
-                all_text = article.get_text()
-                growth_match = re.search(r"([\d,]+)\s*stars?\s*this\s*week", all_text, re.I)
-                if not growth_match:
-                    growth_match = re.search(r"([\d,]+)\s*stars?\s*this\s*month", all_text, re.I)
-                if growth_match:
-                    stars_gained = f"+{growth_match.group(1)}"
-
-                repos.append({
-                    "name": name,
-                    "url": f"https://github.com/{name}",
-                    "description": description,
-                    "language": language,
-                    "stars_gained": stars_gained,
-                    "total_stars": total_stars,
-                })
+                repo = _parse_github_article(article, since)
+                if repo:
+                    repos.append(repo)
             except Exception:
                 continue
 
-        # AI 关键词过滤
-        ai_repos = [r for r in repos if is_ai_related(r)]
-        if len(ai_repos) < 5:
-            # AI 项目太少，回退到全部仓库
-            ai_repos = repos
-
-        print(f"  -> 获取到 {len(repos)} 个仓库，其中 {len([r for r in repos if is_ai_related(r)])} 个 AI 相关")
-        return ai_repos
-
+        return repos
     except Exception as e:
-        print(f"  -> GitHub Trending 抓取失败: {e}")
+        print(f"  -> HTML 抓取失败: {e}")
+        return []
+
+
+def _parse_github_article(article, since):
+    """从单个 article 元素解析仓库信息"""
+    # 仓库名 - 多种 selector 容错
+    h2 = article.select_one("h2 a") or article.select_one("h1 a")
+    if not h2:
+        return None
+    href = h2.get("href", "").strip("/")
+    if not href or "/" not in href:
+        return None
+    name = href.lstrip("/")
+
+    # 描述 - 多种 selector
+    desc_el = article.select_one("p") or article.select_one('[data-testid="repository-description"]')
+    description = desc_el.get_text(strip=True) if desc_el else ""
+
+    # 语言
+    lang_el = article.select_one('[itemprop="programmingLanguage"]')
+    if not lang_el:
+        # 回退: 找包含颜色圆点的 span
+        for span in article.select("span"):
+            if span.select_one("circle") or span.select_one('[fill]'):
+                lang_el = span
+                break
+    language = lang_el.get_text(strip=True) if lang_el else ""
+
+    # 总星数 - 从 stargazers 链接提取
+    total_stars = ""
+    for link in article.select("a"):
+        href = link.get("href", "")
+        if "stargazers" in href:
+            total_stars = link.get_text(strip=True).replace("\n", "").replace(" ", "").strip()
+            break
+
+    # 增长星数 - 多种正则模式
+    stars_gained = ""
+    all_text = article.get_text(separator=" ")
+
+    patterns = [
+        r"([\d,]+)\s*stars?\s*this\s*week",
+        r"([\d,]+)\s*stars?\s*this\s*month",
+        r"([\d,]+)\s*stars?\s*today",
+        r"↑\s*([\d,]+)",  # 某些版本用箭头
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, all_text, re.I)
+        if match:
+            stars_gained = f"+{match.group(1)}"
+            break
+
+    return {
+        "name": name,
+        "url": f"https://github.com/{name}",
+        "description": description,
+        "language": language,
+        "stars_gained": stars_gained,
+        "total_stars": total_stars,
+    }
+
+
+def _scrape_github_api(since="weekly"):
+    """策略 B: 使用 GitHub Search API 搜索本周热门 AI 项目"""
+    try:
+        # 计算日期范围
+        days_map = {"daily": 1, "weekly": 7, "monthly": 30}
+        days = days_map.get(since, 7)
+        since_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        # GitHub search API: 按星数排序，最近创建或最近推送的
+        queries = [
+            f"stars:>100 pushed:>{since_date} topic:ai",
+            f"stars:>100 pushed:>{since_date} topic:machine-learning",
+            f"stars:>100 pushed:>{since_date} topic:llm",
+        ]
+
+        seen = set()
+        repos = []
+        for query in queries:
+            if len(repos) >= 25:
+                break
+            resp = requests.get(
+                "https://api.github.com/search/repositories",
+                params={
+                    "q": query,
+                    "sort": "stars",
+                    "order": "desc",
+                    "per_page": 10,
+                },
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": "AI-Weekly-Bot/1.0",
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+            items = resp.json().get("items", [])
+            for item in items:
+                full_name = item.get("full_name", "")
+                if full_name in seen:
+                    continue
+                seen.add(full_name)
+                repos.append({
+                    "name": full_name,
+                    "url": item.get("html_url", f"https://github.com/{full_name}"),
+                    "description": item.get("description", "") or "",
+                    "language": item.get("language", "") or "",
+                    "stars_gained": "",
+                    "total_stars": str(item.get("stargazers_count", "")),
+                })
+
+        return repos
+    except Exception as e:
+        print(f"  -> GitHub API 搜索失败: {e}")
         return []
 
 
@@ -222,6 +343,11 @@ def scrape_github_trending(since="weekly"):
 WEEKLY_REPORT_PROMPT = """你是一位专注AI领域的资深科技记者和工程师，风格像「量子位」+「IT咖啡馆」结合：专业、简洁、有洞见、实用导向、带从业者视角（为什么这东西值得我现在试？能帮我省时间/钱/提升效果？）。语言全程中文（简体），语气亲切但不水，零废话。
 
 请根据以下【新闻数据】和【GitHub 项目数据】，生成一份 AI 周报（针对AI工程师、研究员、独立开发者）。
+
+## 红线规则（必须遵守）
+1. **禁止捏造**：只从提供的【新闻数据】和【GitHub 项目数据】中提取信息。不要编造项目细节、星数、链接或功能描述。如果数据中缺少某个字段（如星数），就写"数据暂缺"或跳过该细节。
+2. **禁止编造链接**：所有链接必须来自输入数据中已有的URL，不要自己构造github链接或新闻链接。
+3. **禁止幻觉技巧**：实用技巧必须明确关联到上面某条新闻或某个GitHub项目，不要凭空发明不存在的功能。
 
 # 严格输出格式（必须100%遵守，不要加任何开场白、结尾说明、多余文字。只输出以下结构，使用Markdown格式，便于邮件HTML转换）
 
@@ -246,17 +372,17 @@ WEEKLY_REPORT_PROMPT = """你是一位专注AI领域的资深科技记者和工�
 **本周GitHub 5大AI热点项目**
 固定精选5个（从输入中选最热+最实用+最具新意的），每个项目格式严格如下：
 
-**1. 项目名 [owner/repo](https://github.com/owner/repo)**
+**1. 项目名 [owner/repo](链接必须用输入数据中的url)**
 一句话定位：做什么的。
-为什么本周爆火：星增长/讨论热度/解决什么真实痛点（数据或现象）。
+为什么本周爆火：星增长/讨论热度/解决什么真实痛点（用输入中的实际数据，没有就写"近期关注度快速上升"）。
 对AI从业者的价值：能用来干嘛？比现有方案好在哪里？立即可行动的场景。
-上手一句话：git clone ... && pip install ... 或核心试用命令/功能。
+上手一句话：具体的 pip install / docker run / npx 命令，或者核心试用步骤。
 
 （重复5次，编号1-5）
 
 **从本周动态 & 项目中提炼的实用AI技巧**
 3-6条bullet points，每条短小精悍（1-2句），强调"立即可试""节省XX""提升XX"。
-来源必须来自上面的新闻或5个项目，不要凭空发明。
+来源必须来自上面的新闻或5个项目，不要凭空发明。每条技巧末尾标注来源（来自哪个新闻或项目）。
 
 **本周推荐行动清单**
 - 3-5条具体、可执行的建议，例如：star并试用前3个项目中的本地部署功能；周末花1小时测试第2个技巧。
@@ -264,7 +390,7 @@ WEEKLY_REPORT_PROMPT = """你是一位专注AI领域的资深科技记者和工�
 
 ## 写作规范
 - 总字数控制在1200-1800字（邮件友好长度）。
-- 所有链接用Markdown格式 [文字](url)。
+- 所有链接用Markdown格式 [文字](url)，url必须来自输入数据。
 - 用**加粗**突出关键名词/项目/数字。
 - 语言生动但专业，避免"惊爆""碾压"等夸张词，用数据/事实说话。
 - 如果输入中GitHub项目少于5个，从新闻中补充或标注"本周热点较少，精选X个"。
@@ -315,7 +441,7 @@ def format_github_for_prompt(repos):
 # ================= LLM 调用（四级容错） =================
 
 def _call_llm(prompt):
-    """四级 LLM 容错调用链：智谱 -> Gemini -> OpenRouter -> DeepSeek"""
+    """三级 LLM 容错调用链：智谱 -> Gemini -> DeepSeek"""
     errors = []
 
     # 级别 1: 智谱 GLM-4-Flash（免费）
@@ -340,13 +466,13 @@ def _call_llm(prompt):
             errors.append(f"[智谱 GLM-4-Flash] {e}")
             print(f"  [LLM] 智谱失败: {e}")
 
-    # 级别 2: Gemini 2.5 Flash（免费额度）
+    # 级别 2: Gemini 3.0 Flash（免费额度）
     if GEMINI_API_KEY:
-        print("  [LLM] 尝试 Gemini 2.5 Flash...")
+        print("  [LLM] 尝试 Gemini 3.0 Flash...")
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
             response = client.models.generate_content(
-                model="gemini-3.0-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
             )
             print("  [LLM] Gemini 调用成功!")
@@ -498,7 +624,12 @@ if __name__ == "__main__":
     print("=" * 50)
 
     # Step 1: 获取双数据源
-    news_data = search_news("Artificial Intelligence LLM agent news this week")
+    news_queries = [
+        "AI artificial intelligence LLM news this week 2026",
+        "AI agent RAG model release news",
+        "AI open source tools framework update",
+    ]
+    news_data = search_news(news_queries)
     github_data = scrape_github_trending(since="weekly")
 
     # Step 2: 生成周报
