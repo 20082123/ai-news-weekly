@@ -157,7 +157,7 @@ def scrape_github_trending(since="weekly"):
     if TEST_MODE:
         return get_mock_github_trending()
 
-    print(f"[2/2] 正在抓取 GitHub Trending ({since})...")
+    print(f"[2/3] 正在抓取 GitHub Trending ({since})...")
 
     # 策略 A: 直接抓取 HTML 页面
     repos = _scrape_github_html(since)
@@ -176,6 +176,9 @@ def scrape_github_trending(since="weekly"):
     if len(ai_repos) < 5:
         print(f"  -> AI 项目偏少({len(ai_repos)}个)，补充热门项目")
         ai_repos = repos
+
+    # 策略 C: 通过 GitHub API 补充每个仓库的 README 摘要 + 精确星数
+    ai_repos = _enrich_repos_with_api(ai_repos[:15])
 
     print(f"  -> 获取到 {len(repos)} 个仓库，其中 {len([r for r in repos if is_ai_related(r)])} 个 AI 相关")
     return ai_repos
@@ -338,30 +341,108 @@ def _scrape_github_api(since="weekly"):
         return []
 
 
+def _enrich_repos_with_api(repos):
+    """通过 GitHub API 补充仓库的精确星数和 README 摘要"""
+    print("  [3/3] 通过 GitHub API 补充仓库详情...")
+    enriched = 0
+    for repo in repos:
+        name = repo.get("name", "")
+        if not name or "/" not in name:
+            continue
+        try:
+            # 获取仓库详情（精确星数、forks、topics）
+            resp = requests.get(
+                f"https://api.github.com/repos/{name}",
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": "AI-Weekly-Bot/1.0",
+                },
+                timeout=8,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                # 更新精确星数
+                repo["total_stars"] = str(data.get("stargazers_count", repo.get("total_stars", "")))
+                repo["forks"] = str(data.get("forks_count", ""))
+                repo["topics"] = ", ".join(data.get("topics", []))
+                # 补充 description（API 的更完整）
+                if data.get("description") and len(data.get("description", "")) > len(repo.get("description", "")):
+                    repo["description"] = data["description"]
+
+            # 获取 README 前200字符作为摘要
+            readme_resp = requests.get(
+                f"https://api.github.com/repos/{name}/readme",
+                headers={
+                    "Accept": "application/vnd.github.v3.raw",
+                    "User-Agent": "AI-Weekly-Bot/1.0",
+                },
+                timeout=8,
+            )
+            if readme_resp.status_code == 200:
+                readme_text = readme_resp.text.strip()
+                # 提取第一段有意义的描述（跳过标题和徽章行）
+                lines = []
+                for line in readme_text.split("\n"):
+                    line = line.strip()
+                    if not line or line.startswith("#") or line.startswith("![") or line.startswith("[!") or line.startswith("<"):
+                        continue
+                    if line.startswith("["):
+                        continue
+                    lines.append(line)
+                    if len(lines) >= 3:
+                        break
+                if lines:
+                    summary = " ".join(lines)[:300]
+                    repo["readme_summary"] = summary
+
+            enriched += 1
+            # 避免触发 GitHub API 速率限制（未认证60次/小时）
+            time.sleep(1.5)
+        except Exception:
+            continue
+
+    print(f"    -> 成功补充 {enriched}/{len(repos)} 个仓库的详情")
+    return repos
+
+
 # ================= Prompt 模板 =================
 
 WEEKLY_REPORT_PROMPT = """你是一位专注AI领域的资深科技记者和工程师，风格像「量子位」+「IT咖啡馆」结合：专业、简洁、有洞见、实用导向、带从业者视角（为什么这东西值得我现在试？能帮我省时间/钱/提升效果？）。语言全程中文（简体），语气亲切但不水，零废话。
 
-请根据以下【新闻数据】和【GitHub 项目数据】，生成一份 AI 周报（针对AI工程师、研究员、独立开发者）。
+请根据以下【新闻数据】和【GitHub 项目数据】，生成一份 AI 周报。
 
-## 红线规则（必须遵守）
-1. **禁止捏造**：只从提供的【新闻数据】和【GitHub 项目数据】中提取信息。不要编造项目细节、星数、链接或功能描述。如果数据中缺少某个字段（如星数），就写"数据暂缺"或跳过该细节。
-2. **禁止编造链接**：所有链接必须来自输入数据中已有的URL，不要自己构造github链接或新闻链接。
-3. **禁止幻觉技巧**：实用技巧必须明确关联到上面某条新闻或某个GitHub项目，不要凭空发明不存在的功能。
+## 红线规则（违反任何一条即为不合格输出）
+1. **禁止捏造任何数据**：星数、链接、项目功能、上手命令——全部只能来自输入数据。输入中没有的信息，绝对不能编造。
+2. **链接必须逐字复制**：每个 [文字](url) 中的 url 必须从输入数据的"链接:"行原样复制，一个字符都不能改。
+3. **上手命令必须保守**：如果输入的README摘要里有具体安装命令，就用那个。如果没有，就写"详见仓库README"，绝不能编造 pip install/docker run 命令。
+4. **星数必须如实**：输入写"未获取"就写"星数暂缺"，输入写"1234"就写"1,234"，绝对不能自己编一个数字。
 
-# 严格输出格式（必须100%遵守，不要加任何开场白、结尾说明、多余文字。只输出以下结构，使用Markdown格式，便于邮件HTML转换）
+## 正确 vs 错误 示例
 
-# AI 周报 · {year}-第{week_num}周 | {date_range}
+【新闻链接 - 正确】
+- OpenAI 发布 GPT-5 [来源](https://openai.com/blog/gpt-5)  ← url 从输入"链接:"行原样复制
+【新闻链接 - 错误】
+- OpenAI 发布 GPT-5 [来源](链接)  ← 错误！url不能是"链接"两个字
+- OpenAI 发布 GPT-5 [来源](https://www.openai.com/gpt-5)  ← 错误！不能自己构造url
+
+【GitHub项目 - 正确】
+上手一句话：详见仓库 README，克隆后按文档指引配置即可。  ← 没有安装命令时保守写法
+**总星数: 42,300**（输入提供），**本周新增: 数据暂缺**  ← 如实使用输入数据
+
+【GitHub项目 - 错误】
+上手一句话：`pip install langgraph`  ← 错误！输入数据里没有这个命令，不能编造
+**本周新增 +21,644 星**  ← 错误！输入写的是"未获取"，不能自己编数字
+
+# 输出格式（严格遵循，不加任何开场白/结尾说明）
 
 **本周一句话趋势洞察**
-一句话总结本周AI整体走向（前沿/痛点/机会），2-4句，带从业者视角。
+2-4句概括本周AI走向，有判断有观点。
 
 **本周AI重磅动态**
-分成三小节，每条1-3句 + 链接，控制总字数400-600字：
+三小节，总字数400-600字：
 
 ### 重磅头条
-- 事件概括 + [来源](链接)
-  关键信息、影响、为什么重要。
+- 事件概括 + [来源标题](从输入的链接行原样复制url)
 
 ### 技术前沿
 - ...
@@ -370,31 +451,27 @@ WEEKLY_REPORT_PROMPT = """你是一位专注AI领域的资深科技记者和工�
 - ...
 
 **本周GitHub 5大AI热点项目**
-固定精选5个（从输入中选最热+最实用+最具新意的），每个项目格式严格如下：
+精选5个（最热+最实用+最具新意），格式：
 
-**1. 项目名 [owner/repo](链接必须用输入数据中的url)**
-一句话定位：做什么的。
-为什么本周爆火：星增长/讨论热度/解决什么真实痛点（用输入中的实际数据，没有就写"近期关注度快速上升"）。
-对AI从业者的价值：能用来干嘛？比现有方案好在哪里？立即可行动的场景。
-上手一句话：具体的 pip install / docker run / npx 命令，或者核心试用步骤。
+**1. [项目名](从输入的链接行原样复制url)**
+一句话定位：基于输入的描述字段概括。
+热度数据：只使用输入中的总星数和本周新增数据。如果"本周新增"是"未获取"，写"近期关注度上升"即可，不要编数字。
+从业者价值：基于输入的描述和README摘要分析，能用来干嘛。
+上手：有README安装信息就用，没有就写"详见仓库README"。
 
 （重复5次，编号1-5）
 
-**从本周动态 & 项目中提炼的实用AI技巧**
-3-6条bullet points，每条短小精悍（1-2句），强调"立即可试""节省XX""提升XX"。
-来源必须来自上面的新闻或5个项目，不要凭空发明。每条技巧末尾标注来源（来自哪个新闻或项目）。
+**实用AI技巧**
+3-6条，每条1-2句。每条末尾标注（来自：新闻X / 项目Y）。不要凭空发明。
 
-**本周推荐行动清单**
-- 3-5条具体、可执行的建议，例如：star并试用前3个项目中的本地部署功能；周末花1小时测试第2个技巧。
-一句话预告下周可能热点方向。
+**推荐行动清单**
+3-5条可执行建议 + 一句话预告下周方向。
 
 ## 写作规范
-- 总字数控制在1200-1800字（邮件友好长度）。
-- 所有链接用Markdown格式 [文字](url)，url必须来自输入数据。
-- 用**加粗**突出关键名词/项目/数字。
-- 语言生动但专业，避免"惊爆""碾压"等夸张词，用数据/事实说话。
-- 如果输入中GitHub项目少于5个，从新闻中补充或标注"本周热点较少，精选X个"。
-- 只输出以上内容，不要任何prompt相关说明或代码块外文字。
+- 1200-1800字。
+- **加粗**关键名词/数字。
+- 用数据/事实说话，避免夸张词。
+- GitHub项目不足5个时标注"精选X个"。
 
 ## 【新闻数据】
 {news_content}
@@ -407,20 +484,25 @@ WEEKLY_REPORT_PROMPT = """你是一位专注AI领域的资深科技记者和工�
 # ================= Prompt 数据格式化 =================
 
 def format_news_for_prompt(news_items):
-    """将新闻列表格式化为 prompt 中的新闻数据段"""
+    """将新闻列表格式化为 prompt 中的新闻数据段，URL 单独一行确保不丢失"""
     if not news_items:
         return "本周未获取到新闻数据。"
     lines = []
-    for item in news_items:
+    for i, item in enumerate(news_items, 1):
         title = item.get("title", "无标题")
         url = item.get("url", "")
         content = item.get("content", "")
-        lines.append(f"- [{title}]({url}): {content}")
+        lines.append(
+            f"新闻{i}:\n"
+            f"  标题: {title}\n"
+            f"  链接: {url}\n"
+            f"  内容: {content}"
+        )
     return "\n".join(lines)
 
 
 def format_github_for_prompt(repos):
-    """将 GitHub 项目列表格式化为 prompt 中的项目数据段，传前10个给 LLM 精选5个"""
+    """将 GitHub 项目列表格式化为 prompt 中的项目数据段，包含 README 摘要"""
     if not repos:
         return "本周未获取到 GitHub 趋势数据。"
     lines = []
@@ -429,13 +511,31 @@ def format_github_for_prompt(repos):
         url = repo.get("url", "")
         desc = repo.get("description", "无描述")
         lang = repo.get("language", "")
-        stars = repo.get("stars_gained", "")
-        total = repo.get("total_stars", "")
-        lines.append(
-            f"{i}. [{name}]({url}) | {desc} | "
-            f"语言: {lang} | 本周新增: {stars} | 总星数: {total}"
-        )
-    return "\n".join(lines)
+        stars = repo.get("stars_gained", "") or "未获取"
+        total = repo.get("total_stars", "") or "未知"
+        forks = repo.get("forks", "")
+        topics = repo.get("topics", "")
+        readme = repo.get("readme_summary", "")
+
+        parts = [
+            f"项目{i}:",
+            f"  名称: {name}",
+            f"  链接: {url}",
+            f"  描述: {desc}",
+            f"  语言: {lang}",
+            f"  总星数: {total}",
+        ]
+        if stars != "未获取":
+            parts.append(f"  本周新增星数: {stars}")
+        if forks:
+            parts.append(f"  Forks: {forks}")
+        if topics:
+            parts.append(f"  标签: {topics}")
+        if readme:
+            parts.append(f"  README摘要: {readme}")
+
+        lines.append("\n".join(parts))
+    return "\n\n".join(lines)
 
 
 # ================= LLM 调用（四级容错） =================
@@ -455,9 +555,10 @@ def _call_llm(prompt):
             response = client.chat.completions.create(
                 model="glm-4.7-flash",
                 messages=[
-                    {"role": "system", "content": "你是一位资深 AI 科技主编，专注AI领域的科技记者和工程师。"},
+                    {"role": "system", "content": "你是一位资深 AI 科技主编，专注AI领域的科技记者和工程师。严格遵守红线规则，只使用输入数据中的信息。"},
                     {"role": "user", "content": prompt},
                 ],
+                temperature=0.2,
                 stream=False,
             )
             print("  [LLM] 智谱 GLM-4-Flash 调用成功!")
@@ -492,9 +593,10 @@ def _call_llm(prompt):
             response = client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[
-                    {"role": "system", "content": "你是一位资深 AI 科技主编，专注AI领域的科技记者和工程师。"},
+                    {"role": "system", "content": "你是一位资深 AI 科技主编，专注AI领域的科技记者和工程师。严格遵守红线规则，只使用输入数据中的信息。"},
                     {"role": "user", "content": prompt},
                 ],
+                temperature=0.2,
                 stream=False,
             )
             print("  [LLM] DeepSeek 调用成功!")
@@ -528,7 +630,7 @@ def generate_report(news_items, github_repos):
         github_content=github_content,
     )
 
-    print("[3/4] 正在生成周报...")
+    print("[4/5] 正在生成周报...")
     return _call_llm(prompt)
 
 
@@ -606,7 +708,7 @@ def send_email(subject, body, is_html=True):
         msg.attach(MIMEText(html, "html", "utf-8"))
 
     try:
-        print(f"[4/4] 正在发送邮件到 {EMAIL_TO}...")
+        print(f"[5/5] 正在发送邮件到 {EMAIL_TO}...")
         server = smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT)
         server.login(EMAIL_USER, EMAIL_PASS)
         server.send_message(msg)
