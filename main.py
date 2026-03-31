@@ -49,15 +49,22 @@ AI_KEYWORDS = [
 # ================= 日期工具 =================
 
 def get_week_info():
-    """获取当前年份、ISO周数、日期范围"""
+    """获取上周年份、ISO周数、日期范围（周一发送上周的新闻）"""
     now = datetime.now()
-    iso = now.isocalendar()
-    year = iso[0]
-    week_num = iso[1]
-    # 计算本周周一
-    monday = now - timedelta(days=now.weekday())
-    sunday = monday + timedelta(days=6)
-    date_range = f"{monday.strftime('%m/%d')}-{sunday.strftime('%m/%d')}"
+
+    # 获取上周的日期范围
+    # 先计算本周一，然后减去7天得到上周一
+    this_monday = now - timedelta(days=now.weekday())
+    last_monday = this_monday - timedelta(days=7)
+    last_sunday = last_monday + timedelta(days=6)
+
+    # 上周的ISO周数和年份
+    last_iso = last_monday.isocalendar()
+    year = last_iso[0]
+    week_num = last_iso[1]
+
+    date_range = f"{last_monday.strftime('%m/%d')}-{last_sunday.strftime('%m/%d')}"
+
     return {
         "year": year,
         "week_num": week_num,
@@ -413,24 +420,30 @@ WEEKLY_REPORT_PROMPT = """你是一位专注AI领域的资深科技记者和工�
 
 ## 红线规则（违反任何一条即为不合格输出）
 1. **禁止捏造任何数据**：星数、链接、项目功能、上手命令——全部只能来自输入数据。输入中没有的信息，绝对不能编造。
-2. **链接必须逐字复制**：每个 [文字](url) 中的 url 必须从输入数据的"链接:"行原样复制，一个字符都不能改。
+2. **链接必须逐字复制**：每个 [文字](url) 中的 url 必须从输入数据的"链接:"行原样复制，一个字符都不能改。禁止使用"来源"作为链接文字。
 3. **上手命令必须保守**：如果输入的README摘要里有具体安装命令，就用那个。如果没有，就写"详见仓库README"，绝不能编造 pip install/docker run 命令。
-4. **星数必须如实**：输入写"未获取"就写"星数暂缺"，输入写"1234"就写"1,234"，绝对不能自己编一个数字。
+4. **星数必须如实**：输入写"未获取"就写"数据暂缺"，输入有数字就如实使用。绝对不能自己编一个数字。
+5. **当数据缺失时的标准措辞**：
+   - 星数缺失 → 写"热度数据暂缺"或"总星数暂缺"
+   - 本周新增缺失 → 写"本周新增数据暂缺"
+   - 链接缺失 → 写"来源未提供"
+   - 描述缺失 → 写"暂无描述"
 
 ## 正确 vs 错误 示例
 
 【新闻链接 - 正确】
-- OpenAI 发布 GPT-5 [来源](https://openai.com/blog/gpt-5)  ← url 从输入"链接:"行原样复制
+- OpenAI 发布 GPT-5 [查看详情](https://openai.com/blog/gpt-5)  ← url 从输入"链接:"行原样复制
 【新闻链接 - 错误】
+- OpenAI 发布 GPT-5 来源  ← 错误！必须使用链接格式
 - OpenAI 发布 GPT-5 [来源](链接)  ← 错误！url不能是"链接"两个字
 - OpenAI 发布 GPT-5 [来源](https://www.openai.com/gpt-5)  ← 错误！不能自己构造url
 
 【GitHub项目 - 正确】
-上手一句话：详见仓库 README，克隆后按文档指引配置即可。  ← 没有安装命令时保守写法
+上手：详见仓库 README，克隆后按文档指引配置即可。  ← 没有安装命令时保守写法
 **总星数: 42,300**（输入提供），**本周新增: 数据暂缺**  ← 如实使用输入数据
 
 【GitHub项目 - 错误】
-上手一句话：`pip install langgraph`  ← 错误！输入数据里没有这个命令，不能编造
+上手：`pip install langgraph`  ← 错误！输入数据里没有这个命令，不能编造
 **本周新增 +21,644 星**  ← 错误！输入写的是"未获取"，不能自己编数字
 
 # 输出格式（严格遵循，不加任何开场白/结尾说明）
@@ -442,27 +455,27 @@ WEEKLY_REPORT_PROMPT = """你是一位专注AI领域的资深科技记者和工�
 三小节，总字数400-600字：
 
 ### 重磅头条
-- 事件概括 + [来源标题](从输入的链接行原样复制url)
+- 事件概括 + [查看详情](从输入的链接行原样复制url)
 
 ### 技术前沿
-- ...
+- 事件概括 + [查看详情](从输入的链接行原样复制url)
 
 ### 行业动态
-- ...
+- 事件概括 + [查看详情](从输入的链接行原样复制url)
 
 **本周GitHub 5大AI热点项目**
 精选5个（最热+最实用+最具新意），格式：
 
 **1. [项目名](从输入的链接行原样复制url)**
 一句话定位：基于输入的描述字段概括。
-热度数据：只使用输入中的总星数和本周新增数据。如果"本周新增"是"未获取"，写"近期关注度上升"即可，不要编数字。
+热度数据：只使用输入中的总星数和本周新增数据。如果"本周新增"是"未获取"或空值，写"本周新增: 数据暂缺"，不要编数字。
 从业者价值：基于输入的描述和README摘要分析，能用来干嘛。
-上手：有README安装信息就用，没有就写"详见仓库README"。
+上手：有README安装信息就用，没有就写"详见仓库 README"。
 
 （重复5次，编号1-5）
 
 **实用AI技巧**
-3-6条，每条1-2句。每条末尾标注（来自：新闻X / 项目Y）。不要凭空发明。
+3-6条，每条1-2句。每条末尾标注（来自：新闻X）。不要凭空发明。
 
 **推荐行动清单**
 3-5条可执行建议 + 一句话预告下周方向。
@@ -555,10 +568,10 @@ def _call_llm(prompt):
             response = client.chat.completions.create(
                 model="glm-4.7-flash",
                 messages=[
-                    {"role": "system", "content": "你是一位资深 AI 科技主编，专注AI领域的科技记者和工程师。严格遵守红线规则，只使用输入数据中的信息。"},
+                    {"role": "system", "content": "你是一位资深 AI 科技主编。CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写"数据暂缺"或"详见仓库 README"。链接必须从输入"链接:"行原样复制。"},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
+                temperature=0.1,  # 降低温度减少随机性
                 stream=False,
             )
             print("  [LLM] 智谱 GLM-4-Flash 调用成功!")
@@ -572,9 +585,11 @@ def _call_llm(prompt):
         print("  [LLM] 尝试 Gemini 3.0 Flash...")
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
+            system_prompt = "CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写"数据暂缺"或"详见仓库 README"。链接必须从输入"链接:"行原样复制。"
+            full_prompt = f"{system_prompt}\n\n{prompt}"
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=prompt,
+                contents=full_prompt,
             )
             print("  [LLM] Gemini 调用成功!")
             return response.text
@@ -593,10 +608,10 @@ def _call_llm(prompt):
             response = client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[
-                    {"role": "system", "content": "你是一位资深 AI 科技主编，专注AI领域的科技记者和工程师。严格遵守红线规则，只使用输入数据中的信息。"},
+                    {"role": "system", "content": "CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写"数据暂缺"或"详见仓库 README"。链接必须从输入"链接:"行原样复制。"},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
+                temperature=0.1,
                 stream=False,
             )
             print("  [LLM] DeepSeek 调用成功!")
