@@ -568,7 +568,7 @@ def _call_llm(prompt):
             response = client.chat.completions.create(
                 model="glm-4.7-flash",
                 messages=[
-                    {"role": "system", "content": "你是一位资深 AI 科技主编。CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写"数据暂缺"或"详见仓库 README"。链接必须从输入"链接:"行原样复制。"},
+                    {"role": "system", "content": '你是一位资深 AI 科技主编。CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写「数据暂缺」或「详见仓库 README」。链接必须从输入「链接:」行原样复制。'},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,  # 降低温度减少随机性
@@ -585,7 +585,7 @@ def _call_llm(prompt):
         print("  [LLM] 尝试 Gemini 3.0 Flash...")
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
-            system_prompt = "CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写"数据暂缺"或"详见仓库 README"。链接必须从输入"链接:"行原样复制。"
+            system_prompt = 'CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写「数据暂缺」或「详见仓库 README」。链接必须从输入「链接:」行原样复制。'
             full_prompt = f"{system_prompt}\n\n{prompt}"
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
@@ -608,7 +608,7 @@ def _call_llm(prompt):
             response = client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[
-                    {"role": "system", "content": "CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写"数据暂缺"或"详见仓库 README"。链接必须从输入"链接:"行原样复制。"},
+                    {"role": "system", "content": 'CRITICAL: 严格遵守红线规则——禁止编造任何数据（星数、URL、命令）。输入中没有的信息写「数据暂缺」或「详见仓库 README」。链接必须从输入「链接:」行原样复制。'},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
