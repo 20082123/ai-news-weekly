@@ -1,0 +1,18 @@
+{
+  "baseline_commit": "46d6371",
+  "legacy_entry_point": "python main.py",
+  "legacy_workflow_path": ".github/workflows/weekly.yml",
+  "legacy_workflow_runs": "The weekly GitHub Action still runs python main.py.",
+  "legacy_sha256": {
+    "main.py": "693fb3504170449a72506d3b3db661000860aa6fda8852f6db80278eb6b307aa",
+    ".github/workflows/weekly.yml": "b6f0ad084e6568022379410d1d4cddb277421fc7a81e182bf650a84d312a4fc9",
+    "requirements.txt": "e54658f2c701859042a2c54f1f29ff5b6151e3e2956191fa3b4982ce1ba8704b"
+  },
+  "contract": [
+    "The legacy pipeline entry point remains python main.py.",
+    "The weekly GitHub Action still runs python main.py and is not modified in phase 1.",
+    "The ai_signal package runs in shadow mode and does not take over collection, LLM calls, packaging, publishing or email delivery.",
+    "main.py, requirements.txt and the weekly workflow are explicitly out of scope and must not be edited.",
+    "The local SQLite store is the future source of truth but is not yet wired into production."
+  ]
+}

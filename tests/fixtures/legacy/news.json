@@ -1,0 +1,18 @@
+[
+  {
+    "external_id": "example-news-001",
+    "source": "example-news",
+    "title": "Example AI lab announces a placeholder model",
+    "url": "https://example.com/news/example-placeholder-model",
+    "published_at": "2026-08-06T00:00:00+00:00",
+    "summary": "A synthetic summary used only for offline regression tests. It contains no real entity or person."
+  },
+  {
+    "external_id": "example-news-002",
+    "source": "example-news",
+    "title": "Example research paper describes a benchmark",
+    "url": "https://example.invalid/papers/example-benchmark",
+    "published_at": "2026-08-08T00:00:00+00:00",
+    "summary": "Another synthetic record with an example.invalid URL reserved for documentation and testing."
+  }
+]

@@ -1,0 +1,726 @@
+"""Domain models for AI Signal Agent.
+
+Every model is a plain ``dataclass`` built only on the Python standard
+library. The rules enforced across the whole layer are:
+
+* timestamps are always timezone-aware UTC - naive datetimes are rejected;
+* run records use random UUID4 ids;
+* stable entities use deterministic SHA-256 ids derived from their
+  canonical parts, so re-running the pipeline yields identical ids;
+* JSON payloads must be JSON-serializable mappings;
+* models never carry secrets (no api keys, cookies, authorization headers,
+  request headers, etc.);
+* URLs, numbers and dates are never fabricated - they are always supplied
+  by the caller.
+
+The models perform validation and normalization in ``__post_init__``.
+Because the dataclasses are frozen, normalization uses
+``object.__setattr__``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Optional, Tuple
+
+
+class SensitiveDataError(ValueError):
+    """Raised when a payload contains a credential-bearing field."""
+
+
+_SENSITIVE_PAYLOAD_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "cookie",
+        "cookies",
+        "credential",
+        "credentials",
+        "email_pass",
+        "env",
+        "environment",
+        "headers",
+        "password",
+        "passwd",
+        "private_key",
+        "refresh_token",
+        "request_headers",
+        "secret",
+        "set_cookie",
+        "smtp_password",
+        "token",
+    }
+)
+
+
+# --------------------------------------------------------------------------- #
+# Time helpers
+# --------------------------------------------------------------------------- #
+def ensure_aware_utc(value: datetime) -> datetime:
+    """Return ``value`` normalized to aware UTC.
+
+    Naive datetimes are rejected: there is no silent "assume local" or
+    "assume UTC" conversion, so mistakes surface immediately and
+    consistently.
+    """
+    if not isinstance(value, datetime):
+        raise TypeError("a timezone-aware datetime is required")
+    if value.tzinfo is None:
+        raise ValueError("naive datetimes are not allowed; pass a tz-aware datetime")
+    return value.astimezone(timezone.utc)
+
+
+def now_utc() -> datetime:
+    """Current time as aware UTC."""
+    return datetime.now(timezone.utc)
+
+
+# --------------------------------------------------------------------------- #
+# Identifier helpers
+# --------------------------------------------------------------------------- #
+def generate_run_id() -> str:
+    """Random UUID4 for run-scoped records."""
+    return str(uuid.uuid4())
+
+
+def deterministic_id(*parts: Any) -> str:
+    """Deterministic SHA-256 id from canonical parts.
+
+    Parts are joined with a unit separator so that ``("a", "b")`` and
+    ``("ab",)`` cannot collide. ``None`` parts are treated as empty.
+    """
+    joined = "\x1f".join("" if part is None else str(part) for part in parts)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def raw_signal_id(source: str, external_id: str, payload_sha256: str) -> str:
+    return deterministic_id("raw_signal", source, external_id, payload_sha256)
+
+
+def signal_entity_id(source: str, canonical_key: str) -> str:
+    return deterministic_id("signal", source, canonical_key)
+
+
+def event_entity_id(canonical_key: str) -> str:
+    return deterministic_id("event", canonical_key)
+
+
+def event_member_entity_id(event_id: str, signal_id: str) -> str:
+    return deterministic_id("event_member", event_id, signal_id)
+
+
+def evidence_entity_id(source: str, url: Optional[str], snippet: str) -> str:
+    return deterministic_id("evidence", source, url or "", snippet)
+
+
+def claim_evidence_entity_id(claim_id: str, evidence_id: str) -> str:
+    return deterministic_id("claim_evidence", claim_id, evidence_id)
+
+
+def material_pack_entity_id(week_key: str, bundle_hash: str) -> str:
+    return deterministic_id("material_pack", week_key, bundle_hash)
+
+
+def metric_snapshot_entity_id(publication_id: str, measurement_window: str) -> str:
+    return deterministic_id("metric_snapshot", publication_id, measurement_window)
+
+
+def delivery_run_entity_id(
+    week_key: str, bundle_hash: str, policy_version_id: str, channel: str
+) -> str:
+    return deterministic_id(
+        "delivery_run", week_key, bundle_hash, policy_version_id, channel
+    )
+
+
+def policy_version_entity_id(version: str) -> str:
+    return deterministic_id("policy_version", version)
+
+
+# --------------------------------------------------------------------------- #
+# Payload / sequence helpers
+# --------------------------------------------------------------------------- #
+def validate_payload(payload: Any) -> Mapping[str, Any]:
+    """Validate that ``payload`` is a JSON-serializable mapping."""
+    if not isinstance(payload, Mapping):
+        raise TypeError("payload must be a mapping, got %s" % type(payload).__name__)
+    _reject_sensitive_fields(payload)
+    # Raises TypeError/ValueError if the mapping is not JSON serializable.
+    json.dumps(payload)
+    return payload
+
+
+def _reject_sensitive_fields(value: Any, path: Tuple[str, ...] = ()) -> None:
+    """Reject credential-bearing keys before data can reach SQLite.
+
+    The check is recursive and key-based. It deliberately allows harmless
+    capability flags such as ``email_enabled`` while blocking complete
+    environment/header containers and conventional credential field names.
+    """
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).strip().lower().replace("-", "_")
+            if normalized in _SENSITIVE_PAYLOAD_KEYS:
+                location = ".".join(path + (str(key),))
+                raise SensitiveDataError(
+                    "credential-bearing field is not allowed in payload: %s" % location
+                )
+            _reject_sensitive_fields(item, path + (str(key),))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _reject_sensitive_fields(item, path + (str(index),))
+
+
+def as_tuple(value: Any) -> Tuple[Any, ...]:
+    """Coerce a list/set/tuple into a tuple (empty tuple for ``None``)."""
+    if value is None:
+        return ()
+    if isinstance(value, tuple):
+        return value
+    if isinstance(value, (list, set, frozenset)):
+        return tuple(value)
+    raise TypeError("expected a sequence, got %s" % type(value).__name__)
+
+
+def sha256_hex(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _normalize_datetimes(instance: Any, names: Tuple[str, ...]) -> None:
+    """Normalize each named datetime field to aware UTC (skip ``None``)."""
+    for name in names:
+        value = getattr(instance, name)
+        if value is not None:
+            object.__setattr__(instance, name, ensure_aware_utc(value))
+
+
+# Controlled vocabularies shared with the storage CHECK constraints.
+COLLECTION_RUN_STATUSES = ("running", "success", "partial", "failed")
+DELIVERY_RUN_STATUSES = ("running", "success", "partial", "failed")
+PUBLICATION_STATUSES = ("published", "failed")
+SOURCE_BATCH_STATUSES = ("success", "partial", "unavailable", "failed")
+FEEDBACK_DECISIONS = ("adopted", "parked", "rejected")
+SIGNAL_STATES = (
+    "collected",
+    "normalized",
+    "clustered",
+    "verified",
+    "insufficient_evidence",
+    "packaged",
+    "adopted",
+    "parked",
+    "rejected",
+    "published",
+    "measured",
+    "failed",
+    "quarantined",
+)
+CLAIM_EVIDENCE_RELATIONS = ("supports", "contradicts", "contextual")
+
+
+# --------------------------------------------------------------------------- #
+# Policy
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class PolicyVersion:
+    """An immutable version of the scoring/decision policy."""
+
+    version: str
+    created_at: datetime
+    rules: Mapping[str, Any] = field(default_factory=dict)
+    is_active: bool = False
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.version or not self.version.strip():
+            raise ValueError("policy version label must not be empty")
+        if self.id == "":
+            object.__setattr__(self, "id", policy_version_entity_id(self.version))
+        object.__setattr__(self, "rules", validate_payload(self.rules))
+        _normalize_datetimes(self, ("created_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Collection run
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class CollectionRun:
+    """One execution of the collection pipeline for a given week."""
+
+    week_key: str
+    started_at: datetime
+    config_snapshot: Mapping[str, Any]
+    policy_version_id: Optional[str] = None
+    finished_at: Optional[datetime] = None
+    status: str = "running"
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.week_key or not self.week_key.strip():
+            raise ValueError("week_key must not be empty")
+        if self.status not in COLLECTION_RUN_STATUSES:
+            raise ValueError("invalid collection run status: %r" % self.status)
+        if self.id == "":
+            object.__setattr__(self, "id", generate_run_id())
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        object.__setattr__(self, "config_snapshot", validate_payload(self.config_snapshot))
+        _normalize_datetimes(self, ("started_at", "finished_at", "created_at"))
+
+
+# --------------------------------------------------------------------------- #
+# Raw signal
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class RawSignal:
+    """An immutable, exactly-once raw record captured from a source."""
+
+    collection_run_id: str
+    source: str
+    external_id: str
+    payload: Mapping[str, Any]
+    payload_sha256: str
+    collected_at: datetime
+    source_version: str = "0"
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.source or not self.external_id:
+            raise ValueError("source and external_id must not be empty")
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                raw_signal_id(self.source, self.external_id, self.payload_sha256),
+            )
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        object.__setattr__(self, "payload", validate_payload(self.payload))
+        _normalize_datetimes(self, ("collected_at", "created_at"))
+
+
+# --------------------------------------------------------------------------- #
+# Signal (normalized entity)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Signal:
+    """A normalized signal entity, deduplicated by canonical key."""
+
+    collection_run_id: str
+    source: str
+    canonical_key: str
+    raw_signal_id: str
+    first_seen_at: datetime
+    signal_type: str
+    title: Optional[str] = None
+    url: Optional[str] = None
+    state: str = "collected"
+    last_seen_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.source or not self.canonical_key:
+            raise ValueError("source and canonical_key must not be empty")
+        if self.state not in SIGNAL_STATES:
+            raise ValueError("invalid signal state: %r" % self.state)
+        if self.id == "":
+            object.__setattr__(
+                self, "id", signal_entity_id(self.source, self.canonical_key)
+            )
+        if self.last_seen_at is None:
+            object.__setattr__(self, "last_seen_at", self.first_seen_at)
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", self.first_seen_at)
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.first_seen_at)
+        object.__setattr__(self, "payload", validate_payload(self.payload))
+        _normalize_datetimes(
+            self, ("first_seen_at", "last_seen_at", "created_at", "updated_at")
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Event + members
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Event:
+    """A cluster of related signals forming a news event."""
+
+    canonical_key: str
+    title: str
+    created_at: datetime
+    summary: Optional[str] = None
+    occurred_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    cluster_signal_ids: Tuple[str, ...] = ()
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.canonical_key or not self.title.strip():
+            raise ValueError("canonical_key and title must not be empty")
+        if self.id == "":
+            object.__setattr__(self, "id", event_entity_id(self.canonical_key))
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.created_at)
+        object.__setattr__(self, "cluster_signal_ids", as_tuple(self.cluster_signal_ids))
+        object.__setattr__(self, "payload", validate_payload(self.payload))
+        _normalize_datetimes(self, ("created_at", "occurred_at", "updated_at"))
+
+
+@dataclass(frozen=True)
+class EventMember:
+    """Membership link between an event and a signal (unique pair)."""
+
+    event_id: str
+    signal_id: str
+    created_at: datetime
+    role: str = "related"
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.event_id or not self.signal_id:
+            raise ValueError("event_id and signal_id must not be empty")
+        if self.id == "":
+            object.__setattr__(
+                self, "id", event_member_entity_id(self.event_id, self.signal_id)
+            )
+        _normalize_datetimes(self, ("created_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Claims + evidence
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Claim:
+    """A verifiable claim extracted from an event."""
+
+    text: str
+    created_at: datetime
+    event_id: Optional[str] = None
+    claim_type: str = "factual"
+    state: str = "collected"
+    updated_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.text or not self.text.strip():
+            raise ValueError("claim text must not be empty")
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                deterministic_id("claim", self.event_id or "", self.text),
+            )
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.created_at)
+        _normalize_datetimes(self, ("created_at", "updated_at"))
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """A piece of source evidence supporting or contradicting a claim."""
+
+    source: str
+    snippet: str
+    collected_at: datetime
+    url: Optional[str] = None
+    evidence_type: str = "reference"
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    payload_sha256: str = ""
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.source:
+            raise ValueError("evidence source must not be empty")
+        if not self.snippet or not self.snippet.strip():
+            raise ValueError("evidence snippet must not be empty")
+        object.__setattr__(self, "payload", validate_payload(self.payload))
+        if self.payload_sha256 == "":
+            canonical = json.dumps(self.payload, sort_keys=True, ensure_ascii=False)
+            object.__setattr__(self, "payload_sha256", sha256_hex(canonical))
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", self.collected_at)
+        if self.id == "":
+            object.__setattr__(
+                self, "id", evidence_entity_id(self.source, self.url, self.snippet)
+            )
+        _normalize_datetimes(self, ("collected_at", "created_at"))
+
+
+@dataclass(frozen=True)
+class ClaimEvidence:
+    """A link between a claim and a piece of evidence (unique pair)."""
+
+    claim_id: str
+    evidence_id: str
+    created_at: datetime
+    relation: str = "supports"
+    weight: Optional[float] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.claim_id or not self.evidence_id:
+            raise ValueError("claim_id and evidence_id must not be empty")
+        if self.relation not in CLAIM_EVIDENCE_RELATIONS:
+            raise ValueError("invalid claim-evidence relation: %r" % self.relation)
+        if self.weight is not None:
+            weight = float(self.weight)
+            if not (0.0 <= weight <= 1.0):
+                raise ValueError("evidence weight must be between 0.0 and 1.0")
+            object.__setattr__(self, "weight", weight)
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                claim_evidence_entity_id(self.claim_id, self.evidence_id),
+            )
+        _normalize_datetimes(self, ("created_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Material pack
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class MaterialPack:
+    """The packaged weekly material derived from events and claims."""
+
+    week_key: str
+    content: Mapping[str, Any]
+    bundle_hash: str
+    created_at: datetime
+    event_id: Optional[str] = None
+    claim_ids: Tuple[str, ...] = ()
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.week_key or not self.bundle_hash:
+            raise ValueError("week_key and bundle_hash must not be empty")
+        if self.id == "":
+            object.__setattr__(
+                self, "id", material_pack_entity_id(self.week_key, self.bundle_hash)
+            )
+        object.__setattr__(self, "claim_ids", as_tuple(self.claim_ids))
+        object.__setattr__(self, "content", validate_payload(self.content))
+        _normalize_datetimes(self, ("created_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Feedback
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Feedback:
+    """A human decision on a signal/event/claim/pack."""
+
+    target_type: str
+    target_id: str
+    decision: str
+    created_at: datetime
+    reason: Optional[str] = None
+    audience: Optional[str] = None
+    angle: Optional[str] = None
+    usefulness: Optional[int] = None
+    published_url: Optional[str] = None
+    policy_version_id: Optional[str] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.target_type or not self.target_id:
+            raise ValueError("target_type and target_id must not be empty")
+        if self.decision not in FEEDBACK_DECISIONS:
+            raise ValueError("invalid feedback decision: %r" % self.decision)
+        if self.usefulness is not None:
+            if isinstance(self.usefulness, bool) or not isinstance(self.usefulness, int):
+                raise TypeError("usefulness must be an integer between 1 and 5")
+            if not (1 <= self.usefulness <= 5):
+                raise ValueError("usefulness must be between 1 and 5")
+        if self.id == "":
+            object.__setattr__(self, "id", generate_run_id())
+        _normalize_datetimes(self, ("created_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Publication + metrics
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Publication:
+    """A published material pack on a given channel."""
+
+    material_pack_id: str
+    channel: str
+    published_at: datetime
+    status: str = "published"
+    target: Optional[str] = None
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.material_pack_id or not self.channel:
+            raise ValueError("material_pack_id and channel must not be empty")
+        if self.status not in PUBLICATION_STATUSES:
+            raise ValueError("invalid publication status: %r" % self.status)
+        object.__setattr__(self, "payload", validate_payload(self.payload))
+        _normalize_datetimes(self, ("published_at",))
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                deterministic_id(
+                    "publication",
+                    self.material_pack_id,
+                    self.channel,
+                    self.published_at.isoformat(),
+                ),
+            )
+
+
+@dataclass(frozen=True)
+class MetricSnapshot:
+    """Engagement/readership metrics for one publication window."""
+
+    publication_id: str
+    measurement_window: str
+    measured_at: datetime
+    metrics: Mapping[str, Any]
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.publication_id or not self.measurement_window:
+            raise ValueError("publication_id and measurement_window must not be empty")
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", self.measured_at)
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                metric_snapshot_entity_id(self.publication_id, self.measurement_window),
+            )
+        object.__setattr__(self, "metrics", validate_payload(self.metrics))
+        _normalize_datetimes(self, ("measured_at", "created_at"))
+
+
+# --------------------------------------------------------------------------- #
+# Scoring + delivery
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class ScoreLog:
+    """An append-only scoring record for a target entity."""
+
+    target_type: str
+    target_id: str
+    score: float
+    components: Mapping[str, Any]
+    created_at: datetime
+    policy_version_id: Optional[str] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.target_type or not self.target_id:
+            raise ValueError("target_type and target_id must not be empty")
+        if self.id == "":
+            object.__setattr__(self, "id", generate_run_id())
+        object.__setattr__(self, "components", validate_payload(self.components))
+        object.__setattr__(self, "score", float(self.score))
+        _normalize_datetimes(self, ("created_at",))
+
+
+@dataclass(frozen=True)
+class DeliveryRun:
+    """One delivery attempt of a bundle through a channel (idempotent)."""
+
+    week_key: str
+    bundle_hash: str
+    policy_version_id: str
+    channel: str
+    started_at: datetime
+    status: str = "running"
+    finished_at: Optional[datetime] = None
+    warnings: Tuple[str, ...] = ()
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.week_key or not self.bundle_hash or not self.policy_version_id:
+            raise ValueError("week_key, bundle_hash and policy_version_id must not be empty")
+        if self.status not in DELIVERY_RUN_STATUSES:
+            raise ValueError("invalid delivery run status: %r" % self.status)
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", self.started_at)
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                delivery_run_entity_id(
+                    self.week_key, self.bundle_hash, self.policy_version_id, self.channel
+                ),
+            )
+        object.__setattr__(self, "warnings", as_tuple(self.warnings))
+        _normalize_datetimes(self, ("started_at", "finished_at", "created_at"))
+
+
+# --------------------------------------------------------------------------- #
+# Source contract value objects
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class SourceItem:
+    """One item returned by a source ``collect`` call."""
+
+    external_id: str
+    collected_at: datetime
+    payload: Mapping[str, Any]
+    url: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            raise ValueError("external_id must not be empty")
+        object.__setattr__(self, "payload", validate_payload(self.payload))
+        _normalize_datetimes(self, ("collected_at",))
+
+
+@dataclass(frozen=True)
+class SourceBatch:
+    """The result of a single source collection call.
+
+    ``status`` is the only way a source communicates a partial/unavailable
+    failure to the pipeline; a single failing source must never force the
+    whole pipeline to abort.
+    """
+
+    source: str
+    status: str
+    started_at: datetime
+    finished_at: datetime
+    source_version: str = "0"
+    items: Tuple[SourceItem, ...] = ()
+    warnings: Tuple[str, ...] = ()
+    next_cursor: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.source:
+            raise ValueError("source name must not be empty")
+        if self.status not in SOURCE_BATCH_STATUSES:
+            raise ValueError("invalid source batch status: %r" % self.status)
+        object.__setattr__(self, "items", as_tuple(self.items))
+        object.__setattr__(self, "warnings", as_tuple(self.warnings))
+        _normalize_datetimes(self, ("started_at", "finished_at"))
+        if self.finished_at < self.started_at:
+            raise ValueError("finished_at must not be earlier than started_at")
+        if not all(isinstance(item, SourceItem) for item in self.items):
+            raise TypeError("items must contain SourceItem values")
+        if not all(isinstance(warning, str) for warning in self.warnings):
+            raise TypeError("warnings must contain strings")

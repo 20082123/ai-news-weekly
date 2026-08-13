@@ -1,0 +1,24 @@
+[
+  {
+    "external_id": "example-repo-001",
+    "source": "github-trending",
+    "name": "example-org/example-repo",
+    "url": "https://example.com/example-org/example-repo",
+    "stars": 1234,
+    "forks": 56,
+    "language": "Python",
+    "topics": ["example", "placeholder"],
+    "description": "A synthetic repository record used only for offline regression tests."
+  },
+  {
+    "external_id": "example-repo-002",
+    "source": "github-trending",
+    "name": "example-org/another-example",
+    "url": "https://example.com/example-org/another-example",
+    "stars": 987,
+    "forks": 12,
+    "language": "Rust",
+    "topics": ["example"],
+    "description": "Another synthetic repository record with no real counterpart."
+  }
+]

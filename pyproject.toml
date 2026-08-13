@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-signal-agent"
+version = "0.1.0"
+description = "AI Signal Agent - offline infrastructure for the shadow rewrite of the AI weekly pipeline."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "AI News Weekly" }]
+keywords = ["ai", "signal", "agent", "weekly", "shadow"]
+# Phase 1 deliberately declares NO third-party runtime dependencies.
+dependencies = []
+
+[project.scripts]
+ai-signal = "ai_signal.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ai_signal = ["storage/migrations/*.sql"]
