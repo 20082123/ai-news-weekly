@@ -169,3 +169,56 @@ fixture / 数据库的绝对路径、项目 URL 或 payload。数据库路径示
 
 > 退出码：成功 `0`，配置错误（如非法 week-key）`2`，数据库错误 `3`，安全策略
 > 阻断 `4`，`partial` / `unavailable` / `failed` 等非成功完成 `5`。
+
+### 第二阶段 2B1：真实 GitHub 公共数据只读采集（可选联网）
+
+2B1 在影子包里新增一条**受控的、只读的**真实 GitHub 公共仓库搜索路径
+（`collect github-live`），复用 2A 的 `GitHubSource` / `collect_source_once` /
+`source_run` / `raw_signal` / `source_cursor`。
+
+明确说明：
+
+- **默认不会联网**。必须显式提供 `--allow-network` 才会发起真实请求；否则在创建
+  数据库和发起请求之前就阻断（退出码 `4`）。fixture 路径（`collect github`）永远
+  不触发真实网络。
+- **本阶段不使用 token**。只采集公共数据，使用匿名 GitHub API 限额；不发送
+  `Authorization` / `Cookie` 或任何环境数据。
+- **只访问** `https://api.github.com/search/repositories`；禁止跟随到其它主机的
+  跳转，响应最终 URL 会被重新校验。
+- 每次请求最多 `25` 条、单个 scope 最多 `3` 页。
+- **scope_key 继续隔离查询进度**；原始 GitHub query 只用于构造 HTTPS 请求，**绝不**
+  进入 `scope_key`、`source_cursor`、`config_snapshot`、日志、CLI 输出、warning 或
+  异常消息——`config_snapshot` 只保存 `query_sha256` 与安全参数。
+- `main.py` 和 GitHub Actions **仍未切换**，生产仍由 `python main.py` 负责。真实
+  GitHub smoke 只能由人工手动执行。
+
+示例（仓库采用 `src` layout，本阶段不安装包）：
+
+```bash
+# Bash / Git Bash
+PYTHONPATH=src python -m ai_signal collect github-live \
+  --query "topic:ai-agent pushed:>2026-08-01" \
+  --scope-key ai-agents-v1 \
+  --db-path ./.ai-signal/ai_signal.db \
+  --week-key 2026-W33 \
+  --per-page 10 \
+  --max-pages 1 \
+  --allow-network
+```
+
+```powershell
+# PowerShell
+$env:PYTHONPATH = "src"
+python -m ai_signal collect github-live `
+  --query "topic:ai-agent pushed:>2026-08-01" `
+  --scope-key ai-agents-v1 `
+  --db-path ./.ai-signal/ai_signal.db `
+  --week-key 2026-W33 `
+  --per-page 10 `
+  --max-pages 1 `
+  --allow-network
+```
+
+CLI 输出仍只包含 run id、状态、处理数量、warning 数和 cursor 是否推进；不会打印
+query、query_sha256、scope_key、请求/项目 URL、数据库路径、header、响应正文、
+payload 或异常原文。

@@ -146,8 +146,62 @@ Key points:
   feeding the existing `raw_signal(source, external_id, payload_sha256)`
   uniqueness key, so a repeated item never creates a duplicate row.
 * **Safe config.** `config_snapshot` may carry only `run_mode=shadow`,
-  `source=github`, `scope_key`, `fixture=true` and `fixture_sha256`; never a
-  path, an env var or a credential.
+  `source=github`, `scope_key`, `adapter_kind`, and adapter-specific fields
+  (`fixture`/`fixture_sha256` for the fixture adapter, or `query_sha256`/
+  `sort`/`order`/`per_page`/`max_pages` for the REST adapter); never a path,
+  an env var, a credential, or the raw GitHub query.
+
+## Phase 2B1: read-only public GitHub Search collection
+
+Phase 2B1 adds a second, opt-in adapter that reaches the real public GitHub
+Search API on top of the exact same pipeline:
+
+```
+GitHubSearchSpec -> GitHubRestClient -> GitHubSource -> SourceBatch
+                                          -> collect_source_once
+                                             -> source_run / raw_signal / source_cursor
+```
+
+The two adapters are selected by `config_snapshot["adapter_kind"]`:
+
+* `fixture` - offline JSON fixture (phase 2A, no network);
+* `github-rest-v1` - read-only public GitHub Search API (phase 2B1).
+
+Network boundary (hard rules):
+
+* the production transport (`UrllibTransport`) is the only module allowed to
+  import `urllib.request` / `urllib.error`; no other production module may
+  import a network or subprocess client, and no test ever makes a real call;
+* a real request happens **only** for `collect github-live` when
+  `--allow-network` is explicitly passed, after all parameter validation and
+  while `run_mode` stays `shadow`;
+* the only reachable host is `https://api.github.com/search/repositories`;
+  redirects away from it are blocked and the response final URL is re-checked
+  (https, `api.github.com`, no credentials, no alternate port);
+* no `Authorization` / `Cookie` is sent - anonymous public data only.
+
+Query and cursor safety:
+
+* the raw GitHub query is used solely to build the HTTPS request; only
+  `query_sha256 = SHA256(canonical JSON(query, sort, order, per_page, max_pages))`
+  is persisted in `config_snapshot`. The raw query never reaches
+  `scope_key`, the cursor table, logs, warnings or exception messages.
+* cursors are the stable form `page:N` (never a URL or the query) and point
+  at the *next* page to request. The cursor advances only on a successful
+  batch with a distinct next page within `max_pages` (1–3); `per_page` is
+  capped at 25. When `max_pages` is reached (or the result set runs out) the
+  cursor wraps back to `page:1`, so a scope is re-scanned periodically rather
+  than terminating; SQLite dedup keeps `raw_signal` stable across re-scans.
+* every transport/response failure is mapped to a stable `GitHubClientError`
+  code and then to a stable batch warning code (e.g. `GITHUB_RATE_LIMITED`,
+  `GITHUB_INVALID_RESPONSE`), with no sensitive data in the warning.
+
+### What is still deliberately out of scope
+
+* Signal cards, claim/evidence, multi-angle packs, Markdown, Obsidian,
+  feedback sync, X, Reddit, Agent-Reach, auto-publish and email switching.
+* `main.py` and the GitHub Actions workflow remain unchanged; production still
+  runs `python main.py`. A real GitHub smoke run is performed manually only.
 
 ### What is deliberately not in 2A
 

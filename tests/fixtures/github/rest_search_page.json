@@ -1,0 +1,29 @@
+{
+  "total_count": 2,
+  "items": [
+    {
+      "id": 1001,
+      "full_name": "example-org/example-alpha",
+      "html_url": "https://example.com/example-org/example-alpha",
+      "description": "an example agent framework repository",
+      "language": "Python",
+      "stargazers_count": 12,
+      "forks_count": 2,
+      "topics": ["example", "agents"],
+      "pushed_at": "2026-08-01T00:00:00Z",
+      "updated_at": "2026-08-02T00:00:00Z"
+    },
+    {
+      "id": 1002,
+      "full_name": "example-org/example-beta",
+      "html_url": "https://example.org/example-org/example-beta",
+      "description": null,
+      "language": null,
+      "stargazers_count": 7,
+      "forks_count": 0,
+      "topics": [],
+      "pushed_at": null,
+      "updated_at": "2026-08-03T00:00:00Z"
+    }
+  ]
+}

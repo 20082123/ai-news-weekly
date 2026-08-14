@@ -182,6 +182,26 @@ final transaction fails it is rolled back, leaving neither half-written raw
 signals nor a half-advanced cursor, and the run is best-effort marked `failed`
 without masking the `StorageError`.
 
+### Adapters and the raw-query firewall (phase 2B1)
+
+`collection_run.config_snapshot` selects one of two adapters via
+`adapter_kind`, each with its own strict key whitelist:
+
+* `fixture` — `fixture` + `fixture_sha256` (offline; no network).
+* `github-rest-v1` — `query_sha256` + `sort` + `order` + `per_page` +
+  `max_pages` (read-only public GitHub Search).
+
+For the REST adapter the raw GitHub query is used **only** to build the HTTPS
+request. What is persisted is
+`query_sha256 = SHA256(canonical JSON(query, sort, order, per_page, max_pages))`,
+never the raw query. The cursor for the REST adapter is the stable form
+`page:N` (capped at `max_pages` ≤ 3, `per_page` ≤ 25) and points at the
+*next* page to request; it is never a URL and never contains the query.
+`None` starts at page 1. When `max_pages` is reached (or the result set runs
+out) the cursor wraps back to `page:1`, so a scope is re-scanned
+periodically; SQLite dedup keeps `raw_signal` stable across re-scans.
+`raw_signal.source_version` is `github-rest-v1` for this adapter.
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes

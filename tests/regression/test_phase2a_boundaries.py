@@ -19,6 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "src"))
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = ROOT / "src" / "ai_signal"
+TESTS = ROOT / "tests"
 
 # SHA-256 of migration 0001 as it was at the start of phase 2A.
 _MIGRATION_0001_SHA256 = "c30e25a1f6414edcd3cbc59d4113f642752f974e771ede10be3664c5ae752448"
@@ -30,8 +31,22 @@ _LEGACY_SHA256 = {
     "requirements.txt": "e54658f2c701859042a2c54f1f29ff5b6151e3e2956191fa3b4982ce1ba8704b",
 }
 
-# Dotted module names that must never be imported by production code.
-_FORBIDDEN_IMPORTS = ("requests", "httpx", "socket", "subprocess", "urllib.request")
+# Network/subprocess modules forbidden in EVERY production module.
+_FORBIDDEN_IMPORTS_EVERYWHERE = ("requests", "httpx", "socket", "subprocess")
+
+# urllib.request / urllib.error are allowed ONLY in the REST client module.
+_NETWORK_IMPORTS_RESTRICTED = ("urllib.request", "urllib.error")
+_REST_MODULE = pathlib.PurePath("src") / "ai_signal" / "sources" / "github_rest.py"
+
+# Network modules forbidden in test code (tests must never use real network).
+_FORBIDDEN_TEST_IMPORTS = (
+    "requests",
+    "httpx",
+    "socket",
+    "subprocess",
+    "urllib.request",
+    "urllib.error",
+)
 
 # Substrings that must never appear in the GitHub fixtures.
 _FORBIDDEN_FIXTURE_SUBSTRINGS = (
@@ -87,15 +102,45 @@ class ProductionImportBoundaryTest(unittest.TestCase):
     def test_no_network_or_subprocess_imports(self):
         offenders = []
         for path in sorted(SRC.rglob("*.py")):
+            rel = path.relative_to(ROOT)
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            names = _imported_dotted_names(tree)
+            is_rest_module = rel == _REST_MODULE
+            for name in names:
+                for forbidden in _FORBIDDEN_IMPORTS_EVERYWHERE:
+                    if name == forbidden or name.startswith(forbidden + "."):
+                        offenders.append((str(rel), name))
+                # urllib.request / urllib.error only permitted in the REST client.
+                if not is_rest_module:
+                    for forbidden in _NETWORK_IMPORTS_RESTRICTED:
+                        if name == forbidden or name.startswith(forbidden + "."):
+                            offenders.append((str(rel), name))
+        self.assertEqual(
+            offenders,
+            [],
+            "forbidden network/subprocess imports found: %s" % offenders,
+        )
+
+    def test_rest_module_is_the_only_urllib_user(self):
+        # Conversely: the REST client MUST be the one module allowed to use urllib.
+        rest_path = ROOT / _REST_MODULE
+        tree = ast.parse(rest_path.read_text(encoding="utf-8"))
+        names = _imported_dotted_names(tree)
+        joined = " ".join(names)
+        self.assertIn("urllib.request", joined)
+
+    def test_test_code_has_no_network_imports(self):
+        offenders = []
+        for path in sorted(TESTS.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for name in _imported_dotted_names(tree):
-                for forbidden in _FORBIDDEN_IMPORTS:
+                for forbidden in _FORBIDDEN_TEST_IMPORTS:
                     if name == forbidden or name.startswith(forbidden + "."):
                         offenders.append((str(path.relative_to(ROOT)), name))
         self.assertEqual(
             offenders,
             [],
-            "forbidden network/subprocess imports found: %s" % offenders,
+            "test code must not import network modules: %s" % offenders,
         )
 
     def test_main_module_is_not_imported(self):
@@ -105,14 +150,17 @@ class ProductionImportBoundaryTest(unittest.TestCase):
 class FixtureHygieneTest(unittest.TestCase):
     def test_github_fixtures_are_clean(self):
         fixtures_dir = ROOT / "tests" / "fixtures" / "github"
-        for name in ("pages.json", "malformed.json"):
+        for name in ("pages.json", "malformed.json", "rest_search_page.json"):
             text = (fixtures_dir / name).read_text(encoding="utf-8")
             lowered = text.lower()
             for forbidden in _FORBIDDEN_FIXTURE_SUBSTRINGS:
                 self.assertNotIn(forbidden, lowered, "%s contains %s" % (name, forbidden))
             self.assertNotIn("@", text, "%s contains an email address" % name)
             self.assertNotIn("github.com", text, "%s contains a real GitHub URL" % name)
-            self.assertIn("example.com", text, "%s should use reserved example.com URLs" % name)
+            self.assertTrue(
+                "example.com" in text or "example.org" in text or "example.net" in text,
+                "%s should use reserved example.* URLs" % name,
+            )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ Implemented commands:
 * ``ai-signal db status --path PATH``     show schema status
 * ``ai-signal doctor``                    offline environment diagnostics
 * ``ai-signal collect github ...``        offline fixture-backed collection
+* ``ai-signal collect github-live ...``   read-only public GitHub Search API
+                                           (requires ``--allow-network``)
 
 Exit codes:
 
@@ -34,6 +36,7 @@ from .config import ConfigError, load_settings
 from .domain.models import validate_scope_key
 from .pipeline.collect import CollectionPolicyError, collect_source_once
 from .sources.github_fixture import FixtureError, FixtureGitHubClient
+from .sources.github_rest import GitHubRestClient, GitHubSearchSpec, UrllibTransport
 from .storage import sqlite as sqlite_storage
 
 EXIT_OK = 0
@@ -90,6 +93,32 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="scope_key",
         required=True,
         help="stable logical collection scope, e.g. github-fixture-v1",
+    )
+    p_live = collect_sub.add_parser(
+        "github-live",
+        help="collect one page from the real public GitHub Search API",
+    )
+    p_live.add_argument("--query", required=True, help="GitHub repository search query")
+    p_live.add_argument("--db-path", dest="db_path", required=True, help="SQLite database path")
+    p_live.add_argument(
+        "--week-key", dest="week_key", required=True, help="week key, e.g. 2026-W33"
+    )
+    p_live.add_argument(
+        "--scope-key",
+        dest="scope_key",
+        required=True,
+        help="stable logical collection scope, e.g. ai-agents-v1",
+    )
+    p_live.add_argument("--sort", default="updated", help="updated or stars")
+    p_live.add_argument("--order", default="desc", help="asc or desc")
+    p_live.add_argument("--per-page", dest="per_page", type=int, default=10)
+    p_live.add_argument("--max-pages", dest="max_pages", type=int, default=1)
+    p_live.add_argument("--timeout", type=int, default=10)
+    p_live.add_argument(
+        "--allow-network",
+        dest="allow_network",
+        action="store_true",
+        help="required gate to enable a real network request",
     )
     return parser
 
@@ -249,6 +278,7 @@ def cmd_collect_github(args, out) -> int:
         "run_mode": "shadow",
         "source": "github",
         "scope_key": args.scope_key,
+        "adapter_kind": "fixture",
         "fixture": True,
         "fixture_sha256": client.fixture_sha256,
     }
@@ -284,6 +314,81 @@ def cmd_collect_github(args, out) -> int:
     return EXIT_CAPABILITY
 
 
+def cmd_collect_github_live(args, out) -> int:
+    if not _WEEK_KEY_RE.match(args.week_key):
+        out.write("invalid week key: expected YYYY-Www\n")
+        return EXIT_CONFIG_ERROR
+
+    try:
+        validate_scope_key(args.scope_key)
+    except (TypeError, ValueError):
+        out.write("invalid scope key\n")
+        return EXIT_CONFIG_ERROR
+
+    if isinstance(args.timeout, bool) or not isinstance(args.timeout, int) or not 1 <= args.timeout <= 30:
+        out.write("invalid timeout\n")
+        return EXIT_CONFIG_ERROR
+
+    # Build the search spec; this validates the raw query without echoing it.
+    try:
+        spec = GitHubSearchSpec(
+            query=args.query,
+            sort=args.sort,
+            order=args.order,
+            per_page=args.per_page,
+            max_pages=args.max_pages,
+        )
+    except (TypeError, ValueError):
+        out.write("invalid search parameters\n")
+        return EXIT_CONFIG_ERROR
+
+    # Security gate: the real network is opt-in and must be explicit. This is
+    # checked before any database is created and before any request is made.
+    if not args.allow_network:
+        out.write("network not allowed: --allow-network is required\n")
+        return EXIT_SECURITY
+
+    config_snapshot = {
+        "run_mode": "shadow",
+        "source": "github",
+        "scope_key": args.scope_key,
+        "adapter_kind": "github-rest-v1",
+        "query_sha256": spec.query_sha256,
+        "sort": spec.sort,
+        "order": spec.order,
+        "per_page": spec.per_page,
+        "max_pages": spec.max_pages,
+    }
+
+    client = GitHubRestClient(spec, UrllibTransport(), timeout_seconds=args.timeout)
+
+    try:
+        result = collect_source_once(
+            db_path=args.db_path,
+            source="github",
+            week_key=args.week_key,
+            scope_key=args.scope_key,
+            client=client,
+            config_snapshot=config_snapshot,
+        )
+    except CollectionPolicyError as exc:
+        out.write("policy error: %s\n" % exc)
+        return EXIT_SECURITY
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+
+    out.write("run_id: %s\n" % result.run_id)
+    out.write("status: %s\n" % result.status)
+    out.write("processed_item_count: %d\n" % result.processed_item_count)
+    out.write("warning_count: %d\n" % result.warning_count)
+    out.write("cursor_advanced: %s\n" % result.cursor_advanced)
+
+    if result.status == "success":
+        return EXIT_OK
+    return EXIT_CAPABILITY
+
+
 def main(argv: Optional[list] = None, out=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -299,6 +404,8 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_doctor(args, stream)
     if args.command == "collect" and args.collect_command == "github":
         return cmd_collect_github(args, stream)
+    if args.command == "collect" and args.collect_command == "github-live":
+        return cmd_collect_github_live(args, stream)
 
     parser.print_help(stream)
     return EXIT_OK

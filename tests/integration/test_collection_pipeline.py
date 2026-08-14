@@ -17,6 +17,11 @@ from ai_signal.pipeline.collect import CollectionPolicyError, collect_source_onc
 from ai_signal.observability.logging import StructuredLogger  # noqa: E402
 from ai_signal.sources.github import GitHubPage  # noqa: E402
 from ai_signal.sources.github_fixture import FixtureGitHubClient  # noqa: E402
+from ai_signal.sources.github_rest import (  # noqa: E402
+    GitHubRestClient,
+    GitHubSearchSpec,
+    HttpResponse,
+)
 from ai_signal.storage import sqlite as S  # noqa: E402
 from ai_signal.storage.source_repositories import (  # noqa: E402
     SourceCursorRepository,
@@ -32,9 +37,65 @@ def _config(client, scope_key=SCOPE):
         "run_mode": "shadow",
         "source": "github",
         "scope_key": scope_key,
+        "adapter_kind": "fixture",
         "fixture": True,
         "fixture_sha256": client.fixture_sha256,
     }
+
+
+def _rest_config(spec, scope_key):
+    return {
+        "run_mode": "shadow",
+        "source": "github",
+        "scope_key": scope_key,
+        "adapter_kind": "github-rest-v1",
+        "query_sha256": spec.query_sha256,
+        "sort": spec.sort,
+        "order": spec.order,
+        "per_page": spec.per_page,
+        "max_pages": spec.max_pages,
+    }
+
+
+class _FakeRestTransport:
+    def __init__(self, response):
+        self._response = response
+        self.calls = 0
+        self.requested_pages = []
+
+    def get(self, url, headers, timeout_seconds, max_response_bytes):
+        self.calls += 1
+        from urllib.parse import parse_qs, urlparse
+
+        self.requested_pages.append(parse_qs(urlparse(url).query).get("page", ["1"])[0])
+        return self._response
+
+
+def _rest_item(item_id):
+    return {
+        "id": item_id,
+        "full_name": "example-org/example-%d" % item_id,
+        "html_url": "https://example.com/example-org/example-%d" % item_id,
+        "description": "an example repository",
+        "language": "Python",
+        "stargazers_count": 2,
+        "forks_count": 0,
+        "topics": ["example"],
+        "pushed_at": "2026-08-01T00:00:00Z",
+        "updated_at": "2026-08-02T00:00:00Z",
+    }
+
+
+def _rest_response(items, total_count=None, status=200):
+    if total_count is None:
+        total_count = len(items)
+    body = json.dumps({"total_count": total_count, "items": items}).encode("utf-8")
+    return HttpResponse(
+        status=status,
+        headers={"Content-Type": "application/json"},
+        body=body,
+        final_url="https://api.github.com/search/repositories",
+    )
 
 
 def _count(conn, table):
@@ -158,6 +219,7 @@ class CollectionPipelineTest(unittest.TestCase):
                 "run_mode": "shadow",
                 "source": "github",
                 "scope_key": SCOPE,
+                "adapter_kind": "fixture",
                 "fixture": True,
                 "fixture_sha256": client.fixture_sha256,
             },
@@ -251,7 +313,14 @@ class CollectionPipelineTest(unittest.TestCase):
             stored = json.loads(stored_text)
             self.assertEqual(
                 set(stored.keys()),
-                {"run_mode", "source", "scope_key", "fixture", "fixture_sha256"},
+                {
+                    "run_mode",
+                    "source",
+                    "scope_key",
+                    "adapter_kind",
+                    "fixture",
+                    "fixture_sha256",
+                },
             )
 
     def test_structured_logs_contain_only_safe_summary_fields(self):
@@ -331,6 +400,150 @@ class CollectionPipelineTest(unittest.TestCase):
                 config_snapshot=_config(client, "scope-b-v1"),
             )
         self.assertFalse(os.path.exists(self.db))
+
+
+    # ----- live (github-rest-v1) adapter regressions ----- #
+
+    def test_live_adapter_writes_records_and_advances_to_next_page(self):
+        spec = GitHubSearchSpec(query="topic:ai-agent", per_page=10, max_pages=2)
+        client = GitHubRestClient(spec, _FakeRestTransport(_rest_response([_rest_item(1), _rest_item(2)], 15)))
+        result = collect_source_once(
+            self.db, "github", "2026-W33", scope_key="ai-agents-v1",
+            client=client, config_snapshot=_rest_config(spec, "ai-agents-v1"),
+        )
+        self.assertEqual(result.status, "success")
+        self.assertTrue(result.cursor_advanced)
+        with S.connect(self.db) as conn:
+            self.assertEqual(_count(conn, "raw_signal"), 2)
+            self.assertEqual(_count(conn, "source_run"), 1)
+            cursor = SourceCursorRepository(conn).get("github", "ai-agents-v1")
+            self.assertEqual(cursor.cursor, "page:2")
+
+    def test_live_adapter_config_has_no_raw_query(self):
+        spec = GitHubSearchSpec(query="topic:secret-marker-query")
+        client = GitHubRestClient(spec, _FakeRestTransport(_rest_response([_rest_item(1)], 1)))
+        result = collect_source_once(
+            self.db, "github", "2026-W33", scope_key="ai-agents-v1",
+            client=client, config_snapshot=_rest_config(spec, "ai-agents-v1"),
+        )
+        with S.connect(self.db) as conn:
+            row = conn.execute(
+                "SELECT config_snapshot FROM collection_run WHERE id = ?", (result.run_id,)
+            ).fetchone()
+            stored = row["config_snapshot"]
+            self.assertNotIn("topic:secret-marker-query", stored)
+            self.assertIn(spec.query_sha256, stored)
+            cfg = json.loads(stored)
+            self.assertEqual(cfg["adapter_kind"], "github-rest-v1")
+            self.assertNotIn("fixture", cfg)
+            self.assertNotIn("fixture_sha256", cfg)
+            self.assertEqual(cfg["query_sha256"], spec.query_sha256)
+
+    def test_live_adapter_same_scope_continues_next_page(self):
+        spec = GitHubSearchSpec(query="topic:ai-agent", per_page=10, max_pages=3)
+        client = GitHubRestClient(spec, _FakeRestTransport(_rest_response([_rest_item(1)], 25)))
+        first = collect_source_once(
+            self.db, "github", "2026-W33", scope_key="ai-agents-v1",
+            client=client, config_snapshot=_rest_config(spec, "ai-agents-v1"),
+        )
+        self.assertTrue(first.cursor_advanced)
+        second = collect_source_once(
+            self.db, "github", "2026-W33", scope_key="ai-agents-v1",
+            client=client, config_snapshot=_rest_config(spec, "ai-agents-v1"),
+        )
+        self.assertEqual(second.status, "success")
+        with S.connect(self.db) as conn:
+            cursor = SourceCursorRepository(conn).get("github", "ai-agents-v1")
+            self.assertEqual(cursor.cursor, "page:3")
+
+    def test_live_adapter_scopes_are_independent(self):
+        spec = GitHubSearchSpec(query="topic:ai-agent", per_page=10, max_pages=2)
+        client = GitHubRestClient(spec, _FakeRestTransport(_rest_response([_rest_item(1)], 15)))
+        collect_source_once(
+            self.db, "github", "2026-W33", scope_key="scope-a-v1",
+            client=client, config_snapshot=_rest_config(spec, "scope-a-v1"),
+        )
+        collect_source_once(
+            self.db, "github", "2026-W33", scope_key="scope-b-v1",
+            client=client, config_snapshot=_rest_config(spec, "scope-b-v1"),
+        )
+        with S.connect(self.db) as conn:
+            repo = SourceCursorRepository(conn)
+            self.assertEqual(repo.get("github", "scope-a-v1").cursor, "page:2")
+            self.assertEqual(repo.get("github", "scope-b-v1").cursor, "page:2")
+            self.assertEqual(_count(conn, "source_cursor"), 2)
+
+    def test_live_adapter_max_pages_one_rerecans_periodically(self):
+        # max_pages=1 with plenty of results: cursor wraps to page:1 (not a
+        # terminal state). Each run is a real page-1 request; SQLite dedup
+        # keeps raw_signal stable and the cursor stays at page:1 with no
+        # further advance.
+        spec = GitHubSearchSpec(query="topic:ai-agent", per_page=10, max_pages=1)
+        transport = _FakeRestTransport(_rest_response([_rest_item(1)], 100))
+        client = GitHubRestClient(spec, transport)
+        first = collect_source_once(
+            self.db, "github", "2026-W33", scope_key="ai-agents-v1",
+            client=client, config_snapshot=_rest_config(spec, "ai-agents-v1"),
+        )
+        self.assertEqual(first.status, "success")
+        self.assertTrue(first.cursor_advanced)  # None -> page:1 is an advance
+        self.assertEqual(transport.calls, 1)
+        with S.connect(self.db) as conn:
+            raw_after_first = _count(conn, "raw_signal")
+            cursor = SourceCursorRepository(conn).get("github", "ai-agents-v1")
+            self.assertEqual(cursor.cursor, "page:1")
+
+        second = collect_source_once(
+            self.db, "github", "2026-W33", scope_key="ai-agents-v1",
+            client=client, config_snapshot=_rest_config(spec, "ai-agents-v1"),
+        )
+        self.assertEqual(second.status, "success")
+        self.assertEqual(transport.calls, 2)  # a real HTTP call happened
+        self.assertEqual(transport.requested_pages, ["1", "1"])
+        self.assertFalse(second.cursor_advanced)  # page:1 -> page:1, no change
+        with S.connect(self.db) as conn:
+            self.assertEqual(_count(conn, "raw_signal"), raw_after_first)
+            cursor = SourceCursorRepository(conn).get("github", "ai-agents-v1")
+            self.assertEqual(cursor.cursor, "page:1")
+
+    def test_live_adapter_max_pages_three_cycles_to_page_one(self):
+        # max_pages=3 with plenty of results: 1 -> 2 -> 3 -> wrap to 1, and the
+        # next run re-scans page 1 (not stuck repeating page 3).
+        spec = GitHubSearchSpec(query="topic:ai-agent", per_page=10, max_pages=3)
+        transport = _FakeRestTransport(_rest_response([_rest_item(1)], 25))
+        client = GitHubRestClient(spec, transport)
+        for expected_cursor in ("page:2", "page:3", "page:1", "page:2"):
+            result = collect_source_once(
+                self.db, "github", "2026-W33", scope_key="ai-agents-v1",
+                client=client, config_snapshot=_rest_config(spec, "ai-agents-v1"),
+            )
+            self.assertEqual(result.status, "success")
+            with S.connect(self.db) as conn:
+                cursor = SourceCursorRepository(conn).get("github", "ai-agents-v1")
+                self.assertEqual(cursor.cursor, expected_cursor)
+        self.assertEqual(transport.requested_pages, ["1", "2", "3", "1"])
+
+    def test_live_adapter_rate_limited_does_not_advance_cursor(self):
+        spec = GitHubSearchSpec(query="topic:ai-agent")
+        client = GitHubRestClient(
+            spec,
+            _FakeRestTransport(
+                HttpResponse(
+                    status=429,
+                    headers={"Content-Type": "application/json", "X-RateLimit-Remaining": "0"},
+                    body=b"{}",
+                    final_url="https://api.github.com/search/repositories",
+                )
+            ),
+        )
+        result = collect_source_once(
+            self.db, "github", "2026-W33", scope_key="ai-agents-v1",
+            client=client, config_snapshot=_rest_config(spec, "ai-agents-v1"),
+        )
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(result.cursor_advanced)
+        with S.connect(self.db) as conn:
+            self.assertIsNone(SourceCursorRepository(conn).get("github", "ai-agents-v1"))
 
 
 if __name__ == "__main__":

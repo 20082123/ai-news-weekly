@@ -38,6 +38,52 @@ from .base import Source
 WARN_MALFORMED_ITEM = "GITHUB_MALFORMED_ITEM"
 WARN_CLIENT_FAILURE = "GITHUB_CLIENT_FAILURE"
 
+
+class GitHubClientError(Exception):
+    """A GitHub client failure carrying only a stable code.
+
+    The code (and nothing else) is the payload. It must never contain the
+    raw query, a URL, a response body, a header or an underlying exception
+    message; those are attached only as the exception ``__cause__`` for
+    debugging, never surfaced to warnings or logs.
+    """
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+# Stable client-failure codes emitted by concrete clients (e.g. the REST
+# client). GitHubSource maps these to stable warning codes below.
+ERR_INVALID_CURSOR = "INVALID_CURSOR"
+ERR_NETWORK_TIMEOUT = "NETWORK_TIMEOUT"
+ERR_NETWORK_FAILURE = "NETWORK_FAILURE"
+ERR_HTTP_AUTH = "HTTP_AUTH"
+ERR_RATE_LIMITED = "RATE_LIMITED"
+ERR_HTTP_FAILURE = "HTTP_FAILURE"
+ERR_RESPONSE_TOO_LARGE = "RESPONSE_TOO_LARGE"
+ERR_INVALID_CONTENT_TYPE = "INVALID_CONTENT_TYPE"
+ERR_INVALID_JSON = "INVALID_JSON"
+ERR_INVALID_RESPONSE = "INVALID_RESPONSE"
+ERR_REDIRECT_BLOCKED = "REDIRECT_BLOCKED"
+
+# Mapping from a client error code to the stable batch warning code. Any code
+# not listed here (and any non-:class:`GitHubClientError` exception) falls
+# back to :data:`WARN_CLIENT_FAILURE`.
+_CLIENT_ERROR_WARNING = {
+    ERR_RATE_LIMITED: "GITHUB_RATE_LIMITED",
+    ERR_INVALID_RESPONSE: "GITHUB_INVALID_RESPONSE",
+    ERR_INVALID_JSON: "GITHUB_INVALID_RESPONSE",
+    ERR_INVALID_CONTENT_TYPE: "GITHUB_INVALID_RESPONSE",
+    ERR_RESPONSE_TOO_LARGE: "GITHUB_RESPONSE_TOO_LARGE",
+    ERR_REDIRECT_BLOCKED: "GITHUB_REDIRECT_BLOCKED",
+    ERR_INVALID_CURSOR: "GITHUB_INVALID_CURSOR",
+    ERR_HTTP_AUTH: "GITHUB_HTTP_AUTH",
+    ERR_HTTP_FAILURE: "GITHUB_HTTP_FAILURE",
+    ERR_NETWORK_TIMEOUT: "GITHUB_NETWORK_TIMEOUT",
+    ERR_NETWORK_FAILURE: "GITHUB_NETWORK_FAILURE",
+}
+
 # Exact field whitelist copied into a repository item payload.
 ALLOWED_FIELDS: Tuple[str, ...] = (
     "id",
@@ -139,7 +185,18 @@ class GitHubSource(Source):
             page_version = page.source_version
             next_cursor = page.next_cursor
             fetched_at = page.fetched_at
-        except Exception:  # noqa: BLE001 - any client failure is total
+        except GitHubClientError as exc:
+            # Stable client failure -> stable warning code, no sensitive data.
+            finished = self._clock()
+            return SourceBatch(
+                source=self.name,
+                status="failed",
+                started_at=started,
+                finished_at=finished,
+                source_version=self._safe_client_version(),
+                warnings=(_CLIENT_ERROR_WARNING.get(exc.code, WARN_CLIENT_FAILURE),),
+            )
+        except Exception:  # noqa: BLE001 - any other client failure is total
             finished = self._clock()
             return SourceBatch(
                 source=self.name,

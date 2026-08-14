@@ -53,9 +53,54 @@ class CollectionPolicyError(Exception):
     """Raised when the requested collection violates the security policy."""
 
 
-_ALLOWED_CONFIG_KEYS = frozenset(
-    {"run_mode", "source", "scope_key", "fixture", "fixture_sha256"}
+_ADAPTER_KIND_FIXTURE = "fixture"
+_ADAPTER_KIND_REST = "github-rest-v1"
+
+_FIXTURE_CONFIG_KEYS = frozenset(
+    {"run_mode", "source", "scope_key", "adapter_kind", "fixture", "fixture_sha256"}
 )
+_REST_CONFIG_KEYS = frozenset(
+    {
+        "run_mode",
+        "source",
+        "scope_key",
+        "adapter_kind",
+        "query_sha256",
+        "sort",
+        "order",
+        "per_page",
+        "max_pages",
+    }
+)
+
+
+def _require_hex64(label: str, value: Any) -> None:
+    if not isinstance(value, str) or len(value) != 64:
+        raise CollectionPolicyError("%s must be a 64-character hex string" % label)
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise CollectionPolicyError("%s must be a hex string" % label) from exc
+
+
+def _validate_fixture_fields(config_snapshot: Mapping[str, Any]) -> None:
+    if config_snapshot.get("fixture") is not True:
+        raise CollectionPolicyError("only fixture-backed collection is permitted")
+    _require_hex64("fixture_sha256", config_snapshot.get("fixture_sha256"))
+
+
+def _validate_rest_fields(config_snapshot: Mapping[str, Any]) -> None:
+    _require_hex64("query_sha256", config_snapshot.get("query_sha256"))
+    if config_snapshot.get("sort") not in ("updated", "stars"):
+        raise CollectionPolicyError("sort must be 'updated' or 'stars'")
+    if config_snapshot.get("order") not in ("asc", "desc"):
+        raise CollectionPolicyError("order must be 'asc' or 'desc'")
+    per_page = config_snapshot.get("per_page")
+    if isinstance(per_page, bool) or not isinstance(per_page, int) or not 1 <= per_page <= 25:
+        raise CollectionPolicyError("per_page must be between 1 and 25")
+    max_pages = config_snapshot.get("max_pages")
+    if isinstance(max_pages, bool) or not isinstance(max_pages, int) or not 1 <= max_pages <= 3:
+        raise CollectionPolicyError("max_pages must be between 1 and 3")
 
 
 @dataclass(frozen=True)
@@ -75,24 +120,27 @@ def _validate_collection_config(
 ) -> None:
     if not isinstance(config_snapshot, Mapping):
         raise CollectionPolicyError("config_snapshot must be a mapping")
-    extra = set(config_snapshot.keys()) - _ALLOWED_CONFIG_KEYS
+    adapter_kind = config_snapshot.get("adapter_kind")
+    if adapter_kind == _ADAPTER_KIND_FIXTURE:
+        allowed = _FIXTURE_CONFIG_KEYS
+    elif adapter_kind == _ADAPTER_KIND_REST:
+        allowed = _REST_CONFIG_KEYS
+    else:
+        raise CollectionPolicyError("unsupported adapter_kind")
+    extra = set(config_snapshot.keys()) - allowed
     if extra:
         raise CollectionPolicyError("config_snapshot contains disallowed keys")
+    # Shared invariants for both adapters.
     if config_snapshot.get("run_mode") != "shadow":
         raise CollectionPolicyError("only shadow run_mode is permitted")
     if config_snapshot.get("source") != source:
         raise CollectionPolicyError("config_snapshot source mismatch")
-    if config_snapshot.get("fixture") is not True:
-        raise CollectionPolicyError("only fixture-backed collection is permitted")
-    fixture_sha = config_snapshot.get("fixture_sha256")
-    if not isinstance(fixture_sha, str) or len(fixture_sha) != 64:
-        raise CollectionPolicyError("fixture_sha256 must be a 64-character hex string")
-    try:
-        int(fixture_sha, 16)
-    except ValueError as exc:
-        raise CollectionPolicyError("fixture_sha256 must be a hex string") from exc
     if config_snapshot.get("scope_key") != scope_key:
         raise CollectionPolicyError("config_snapshot scope_key mismatch")
+    if adapter_kind == _ADAPTER_KIND_FIXTURE:
+        _validate_fixture_fields(config_snapshot)
+    else:
+        _validate_rest_fields(config_snapshot)
 
 
 def _canonical_payload_hash(payload: Mapping[str, Any]) -> str:
@@ -159,11 +207,13 @@ def collect_source_once(
     config_snapshot: Mapping[str, Any],
     logger: Optional[StructuredLogger] = None,
 ) -> CollectionResult:
-    """Run one offline fixture-backed collection for ``source``.
+    """Run one collection for ``source`` (one page per call).
 
     ``scope_key`` isolates cursor progress between different logical query
-    scopes (for example ``ai-agents-v1``). Phase 2A supports only
-    ``source == "github"`` with a fixture client.
+    scopes (for example ``ai-agents-v1``). Two adapter kinds are accepted via
+    ``config_snapshot["adapter_kind"]``: ``"fixture"`` (offline JSON fixture)
+    and ``"github-rest-v1"`` (read-only public GitHub Search API). The raw
+    GitHub query never enters the config snapshot; only its SHA-256 does.
     """
     if source != "github":
         raise CollectionPolicyError("unsupported source: %s" % source)
