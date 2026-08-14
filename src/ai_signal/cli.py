@@ -6,6 +6,7 @@ Implemented commands:
 * ``ai-signal db init --path PATH``       create or migrate the local database
 * ``ai-signal db status --path PATH``     show schema status
 * ``ai-signal doctor``                    offline environment diagnostics
+* ``ai-signal collect github ...``        offline fixture-backed collection
 
 Exit codes:
 
@@ -23,12 +24,16 @@ vault and never sends email.
 from __future__ import annotations
 
 import argparse
+import re
 import sqlite3
 import sys
 from pathlib import Path
 from typing import Optional
 
 from .config import ConfigError, load_settings
+from .domain.models import validate_scope_key
+from .pipeline.collect import CollectionPolicyError, collect_source_once
+from .sources.github_fixture import FixtureError, FixtureGitHubClient
 from .storage import sqlite as sqlite_storage
 
 EXIT_OK = 0
@@ -36,6 +41,9 @@ EXIT_CONFIG_ERROR = 2
 EXIT_DB_ERROR = 3
 EXIT_SECURITY = 4
 EXIT_CAPABILITY = 5
+
+# Strict ISO-8601-ish week key, e.g. 2026-W33.
+_WEEK_KEY_RE = re.compile(r"^\d{4}-W\d{2}$")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -65,6 +73,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # doctor -----------------------------------------------------------------
     sub.add_parser("doctor", help="run offline environment diagnostics")
+
+    # collect ----------------------------------------------------------------
+    p_collect = sub.add_parser("collect", help="offline fixture-backed collection")
+    collect_sub = p_collect.add_subparsers(dest="collect_command", required=True)
+    p_github = collect_sub.add_parser(
+        "github", help="collect one page from a GitHub JSON fixture"
+    )
+    p_github.add_argument("--fixture", required=True, help="path to a GitHub JSON fixture")
+    p_github.add_argument("--db-path", dest="db_path", required=True, help="SQLite database path")
+    p_github.add_argument(
+        "--week-key", dest="week_key", required=True, help="week key, e.g. 2026-W33"
+    )
+    p_github.add_argument(
+        "--scope-key",
+        dest="scope_key",
+        required=True,
+        help="stable logical collection scope, e.g. github-fixture-v1",
+    )
     return parser
 
 
@@ -198,6 +224,66 @@ def cmd_doctor(args, out) -> int:
     return EXIT_OK
 
 
+def cmd_collect_github(args, out) -> int:
+    if not _WEEK_KEY_RE.match(args.week_key):
+        out.write("invalid week key: expected YYYY-Www\n")
+        return EXIT_CONFIG_ERROR
+
+    try:
+        validate_scope_key(args.scope_key)
+    except (TypeError, ValueError):
+        out.write("invalid scope key\n")
+        return EXIT_CONFIG_ERROR
+
+    try:
+        client = FixtureGitHubClient(args.fixture)
+    except FixtureError as exc:
+        out.write("fixture error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
+    except OSError:
+        # Deliberately do not echo the path-bearing OS error text.
+        out.write("fixture error: unable to read fixture\n")
+        return EXIT_CONFIG_ERROR
+
+    config_snapshot = {
+        "run_mode": "shadow",
+        "source": "github",
+        "scope_key": args.scope_key,
+        "fixture": True,
+        "fixture_sha256": client.fixture_sha256,
+    }
+
+    try:
+        result = collect_source_once(
+            db_path=args.db_path,
+            source="github",
+            week_key=args.week_key,
+            scope_key=args.scope_key,
+            client=client,
+            config_snapshot=config_snapshot,
+        )
+    except CollectionPolicyError as exc:
+        out.write("policy error: %s\n" % exc)
+        return EXIT_SECURITY
+    except sqlite_storage.StorageError:
+        # Generic message: never print the db path or low-level error text.
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+
+    # Output only safe, payload-free fields. No fixture path, db path, URL,
+    # scope key or item payload is ever printed.
+    out.write("run_id: %s\n" % result.run_id)
+    out.write("status: %s\n" % result.status)
+    out.write("processed_item_count: %d\n" % result.processed_item_count)
+    out.write("warning_count: %d\n" % result.warning_count)
+    out.write("cursor_advanced: %s\n" % result.cursor_advanced)
+
+    if result.status == "success":
+        return EXIT_OK
+    # partial / unavailable / failed are non-success completions.
+    return EXIT_CAPABILITY
+
+
 def main(argv: Optional[list] = None, out=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -211,6 +297,8 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_db_status(args, stream)
     if args.command == "doctor":
         return cmd_doctor(args, stream)
+    if args.command == "collect" and args.collect_command == "github":
+        return cmd_collect_github(args, stream)
 
     parser.print_help(stream)
     return EXIT_OK

@@ -96,6 +96,68 @@ redacted logger is the second boundary that prevents tokens, cookies,
 authorization headers, SMTP details, emails and sensitive URL query
 parameters from reaching stdout or a future log sink.
 
+## Phase 2A: offline GitHub fixture collection
+
+Phase 2A adds the first concrete collection path, still entirely offline:
+
+```
+GitHub JSON fixture ──▶ FixtureGitHubClient ──▶ GitHubSource.collect
+                                                     │
+                                                     ▼
+                                               SourceBatch
+                                                     │
+                       collect_source_once (pipeline/collect.py)
+                                                     │
+                    ┌────────────────┬───────────────┴───────────────┐
+                    ▼                ▼                               ▼
+              CollectionRun    SourceRun                     RawSignal (upsert)
+              (own txn)        ──────────────────── single final transaction ───────────
+                               SourceCursor (advance: success only, per (source, scope_key))
+                               + CollectionRun status
+```
+
+Key points:
+
+* **Offline only.** The client is `FixtureGitHubClient`, which reads a local
+  JSON file. There is no online/real/live network mode in 2A and no call to
+  Agent-Reach. A real GitHub client is deferred to a later phase.
+* **Progress is isolated by `(source, scope_key)`.** A `scope_key` is a stable
+  logical collection alias (for example `ai-agents-v1`,
+  `github-fixture-v1`) - never the raw GitHub query, a URL, a file path or a
+  date. Each scope keeps its own `SourceCursor` row and its own `SourceRun`
+  rows, so running several GitHub query scopes never overwrites another
+  scope's cursor or trips a uniqueness clash within a collection run. When the
+  query semantics change incompatibly the scope version is bumped
+  (`ai-agents-v1` -> `ai-agents-v2`). The raw GitHub query never reaches the
+  cursor table.
+* **Cursor advances on a new successful position only.** `SourceCursor` is
+  updated inside the final transaction only when `SourceBatch.status ==
+  "success"` and the source returns a distinct, non-null next cursor. A
+  terminal null cursor or repeated cursor does not clear or falsely advance
+  the stored value. `partial`, `unavailable` and `failed` batches are still
+  recorded (as a `SourceRun` and raw signals for the items that did parse) but
+  never move the cursor, so the next run retries the same page.
+* **One atomic final transaction.** `SourceRun`, all `RawSignal` upserts, the
+  optional cursor advance and the `CollectionRun` status update share a single
+  `BEGIN/COMMIT`. If it fails it is rolled back and the run is best-effort
+  marked `failed` without masking the original `StorageError`.
+* **Deterministic dedup.** Each item payload is hashed with canonical JSON
+  (`sort_keys=True`, `ensure_ascii=False`, `separators=(",", ":")`) → SHA-256,
+  feeding the existing `raw_signal(source, external_id, payload_sha256)`
+  uniqueness key, so a repeated item never creates a duplicate row.
+* **Safe config.** `config_snapshot` may carry only `run_mode=shadow`,
+  `source=github`, `scope_key`, `fixture=true` and `fixture_sha256`; never a
+  path, an env var or a credential.
+
+### What is deliberately not in 2A
+
+* Network collection and a real GitHub HTTP client.
+* Agent-Reach doctor / reachability checks.
+* A real read-only smoke run against live data.
+
+These belong to **2A-2** (Agent-Reach doctor and a real read-only smoke), which
+runs only after the offline path is verified end to end.
+
 ## Rollback
 
 Phase 1 is purely additive: it introduces `src/ai_signal/**`, `tests/**`,

@@ -121,3 +121,51 @@ python -m ai_signal doctor
 [docs/data-model.md](./docs/data-model.md)。该重构是纯增量改动，删除
 `src/ai_signal/`、`tests/`、`docs/`、`pyproject.toml` 即可完整回滚，不会
 影响现有 legacy 流程。
+
+### 第二阶段 2A：GitHub 离线增量采集（fixture 模式）
+
+第二阶段 2A 在影子包里加入了一条**离线**的 GitHub 增量采集路径：读取本地
+JSON fixture，经过 `GitHubSource` 解析为 `SourceBatch`，再由 pipeline 写入
+本地 SQLite（`source_run` / `raw_signal` / `source_cursor`）。
+
+明确说明：
+
+- **GitHub 网络采集尚未启用**。2A 只支持 fixture，不存在 online/real/live 网络
+  模式，也不调用 Agent-Reach。
+- **GitHub Actions 与 `main.py` 仍未切换**，生产仍由 `python main.py` 负责。
+- 该路径默认 `shadow`，cursor 仅在某次采集 `success` 且返回了与当前值不同的
+  非空 next cursor 时才推进；末页、重复 cursor、`partial` / `unavailable` /
+  `failed` 都不推进或清空已有 cursor。
+- 采集进度按 `(source, scope_key)` 隔离。`--scope-key` 是稳定的逻辑采集范围别名
+  （如 `github-fixture-v1`、`ai-agents-v1`），**不是**原始 GitHub query、URL、路径
+  或日期；它必须匹配 `^[a-z0-9][a-z0-9._-]{0,63}$`。原始 query 永不进入 cursor 表。
+  当查询语义发生不兼容变化时，应升级版本化 scope（如 `ai-agents-v1` →
+  `ai-agents-v2`），不同 scope 的 cursor 互不覆盖。
+
+离线 fixture 示例（仓库采用 `src` layout，本阶段不安装包，需设置模块路径）：
+
+```bash
+# Bash / Git Bash
+PYTHONPATH=src python -m ai_signal collect github \
+  --fixture tests/fixtures/github/pages.json \
+  --db-path ./.ai-signal/ai_signal.db \
+  --week-key 2026-W33 \
+  --scope-key github-fixture-v1
+```
+
+```powershell
+# PowerShell
+$env:PYTHONPATH = "src"
+python -m ai_signal collect github `
+  --fixture tests/fixtures/github/pages.json `
+  --db-path ./.ai-signal/ai_signal.db `
+  --week-key 2026-W33 `
+  --scope-key github-fixture-v1
+```
+
+输出只包含 run id、状态、处理数量、warning 数和 cursor 是否推进，不会打印
+fixture / 数据库的绝对路径、项目 URL 或 payload。数据库路径示例统一使用
+`.ai-signal`，不写入任何用户真实路径。
+
+> 退出码：成功 `0`，配置错误（如非法 week-key）`2`，数据库错误 `3`，安全策略
+> 阻断 `4`，`partial` / `unavailable` / `failed` 等非成功完成 `5`。

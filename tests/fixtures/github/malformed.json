@@ -1,0 +1,28 @@
+{
+  "source_version": "fixture-1",
+  "pages": [
+    {
+      "cursor_in": null,
+      "cursor_out": "done",
+      "fetched_at": "2026-08-13T00:00:00+00:00",
+      "items": [
+        {
+          "id": 201,
+          "full_name": "example-org/example-good",
+          "html_url": "https://example.com/example-org/example-good",
+          "description": "a well-formed example repository",
+          "language": "Go",
+          "stargazers_count": 5,
+          "forks_count": 0,
+          "topics": ["example"],
+          "pushed_at": "2026-08-01T00:00:00+00:00",
+          "updated_at": "2026-08-05T00:00:00+00:00"
+        },
+        {
+          "id": 202,
+          "full_name": "example-org/example-bad"
+        }
+      ]
+    }
+  ]
+}

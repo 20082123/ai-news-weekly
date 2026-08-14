@@ -43,10 +43,11 @@ class MigrationsTest(unittest.TestCase):
 
     def test_fresh_initialization(self):
         status = S.initialize_database(self.db)
+        versions = [version for version, _ in S._discover_migrations()]
         self.assertTrue(status["initialized"])
         self.assertTrue(status["up_to_date"])
-        self.assertEqual(status["latest_applied"], 1)
-        self.assertEqual(status["target"], 1)
+        self.assertEqual(status["latest_applied"], versions[-1])
+        self.assertEqual(status["target"], versions[-1])
 
     def test_repeated_initialization_is_idempotent(self):
         first = S.initialize_database(self.db)
@@ -55,15 +56,18 @@ class MigrationsTest(unittest.TestCase):
         self.assertTrue(second["up_to_date"])
         with S.connect(self.db) as conn:
             count = conn.execute("SELECT COUNT(*) FROM schema_migration").fetchone()[0]
-        self.assertEqual(count, 1)
+        self.assertEqual(count, len(S._discover_migrations()))
 
     def test_schema_status_on_initialized_db(self):
         S.initialize_database(self.db)
         with S.connect(self.db) as conn:
             status = S.schema_status(conn)
+        filenames = [path.name for _, path in S._discover_migrations()]
         self.assertTrue(status["initialized"])
-        self.assertEqual(len(status["applied"]), 1)
-        self.assertEqual(status["applied"][0]["filename"], "0001_initial.sql")
+        self.assertEqual(len(status["applied"]), len(filenames))
+        self.assertEqual(
+            [entry["filename"] for entry in status["applied"]], filenames
+        )
 
     def test_all_tables_created(self):
         S.initialize_database(self.db)

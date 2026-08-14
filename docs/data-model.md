@@ -126,6 +126,62 @@ The minimal feedback fields mirror the future Obsidian frontmatter sync:
 append-only; phase 1 defines the model and schema but does not write to a
 vault or implement the sync command.
 
+## Phase 2A: `source_run` and `source_cursor`
+
+Migration `0002_source_collection.sql` adds two tables for per-source
+incremental collection. It is **purely additive**:
+
+* migration `0001_initial.sql` is immutable and must never be edited; every
+  schema change is a new numbered migration applied after it;
+* `0002` does not modify or drop any existing table, column or index.
+
+### `source_run`
+
+One row per `(collection_run, source, scope_key)` triple, mirroring the
+outcome of a `SourceBatch`:
+
+| Column | Notes |
+| --- | --- |
+| `id` | UUID4 primary key |
+| `collection_run_id` | FK → `collection_run(id)`; `UNIQUE(collection_run_id, source, scope_key)` |
+| `source`, `scope_key`, `source_version` | which source/scope produced the batch |
+| `status` | `success` / `partial` / `unavailable` / `failed` (CHECK) |
+| `started_at`, `finished_at` | aware UTC; the model forbids `finished_at < started_at` |
+| `cursor_in`, `cursor_out` | pagination cursors (nullable) |
+| `item_count`, `warning_count` | non-negative integers (CHECK `>= 0`) |
+| `warnings` | JSON array of stable warning codes; restored as a tuple of strings |
+| `cursor_advanced` | 0/1 (CHECK), true only when the cursor was advanced |
+
+### `source_cursor`
+
+One row per `(source, scope_key)` - the composite primary key - holding the
+current pagination cursor, the `source_version`, the `last_run_id`
+(FK → `collection_run(id)`) and `updated_at`. `cursor` is non-null: it is only
+written when a successful batch supplies a distinct, non-null next cursor.
+
+### `scope_key` contract
+
+`scope_key` isolates collection progress between different logical GitHub
+query scopes. It is a **stable alias** (for example `ai-agents-v1`,
+`github-fixture-v1`), validated against `^[a-z0-9][a-z0-9._-]{0,63}$`. It is
+explicitly **not** the raw GitHub query, a URL, a file path, a date or a
+credential; the raw query never reaches the cursor table. When query semantics
+change incompatibly the scope version is bumped
+(`ai-agents-v1` -> `ai-agents-v2`), so old and new progress coexist.
+
+### Cursor and raw signals share one transaction
+
+`collect_source_once` writes the `SourceRun`, all `RawSignal` upserts, the
+optional `source_cursor` advance and the `collection_run` status update inside
+a single `BEGIN/COMMIT`. The cursor is advanced **iff** the batch status is
+`success` and the source supplies a distinct, non-null next cursor. A terminal
+null cursor or repeated cursor never clears or falsely advances the stored
+value. `partial` / `unavailable` / `failed` still record what was parsed but
+leave the cursor untouched, so the next run re-fetches the same page. If the
+final transaction fails it is rolled back, leaving neither half-written raw
+signals nor a half-advanced cursor, and the run is best-effort marked `failed`
+without masking the `StorageError`.
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes

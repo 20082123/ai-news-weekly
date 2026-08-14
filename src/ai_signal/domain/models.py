@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -724,3 +725,135 @@ class SourceBatch:
             raise TypeError("items must contain SourceItem values")
         if not all(isinstance(warning, str) for warning in self.warnings):
             raise TypeError("warnings must contain strings")
+
+
+# --------------------------------------------------------------------------- #
+# Source collection run + cursor (phase 2A)
+# --------------------------------------------------------------------------- #
+# A ``scope_key`` is a stable logical collection scope (for example
+# ``ai-agents-v1``). It isolates per-scope cursor progress so that different
+# GitHub query scopes never overwrite each other. It is deliberately NOT the
+# raw query string, a URL, a file path or a date, and it must never carry
+# credentials. When the query semantics change incompatibly the scope version
+# is bumped (``ai-agents-v1`` -> ``ai-agents-v2``).
+SCOPE_KEY_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,63}$"
+_SCOPE_KEY_RE = re.compile(SCOPE_KEY_PATTERN)
+
+
+def validate_scope_key(value: Any) -> str:
+    """Validate a stable logical scope key.
+
+    The value is never echoed back in the error, so an accidentally-supplied
+    raw query cannot leak through an exception message.
+    """
+    if not isinstance(value, str):
+        raise TypeError("scope_key must be a string")
+    if _SCOPE_KEY_RE.fullmatch(value) is None:
+        raise ValueError("invalid scope_key")
+    return value
+
+
+def _non_negative_int(value: Any, name: str) -> int:
+    """Validate that ``value`` is a non-negative integer (booleans rejected)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("%s must be a non-negative integer" % name)
+    if value < 0:
+        raise ValueError("%s must be a non-negative integer" % name)
+    return value
+
+
+@dataclass(frozen=True)
+class SourceRun:
+    """One execution of a single source within a collection run.
+
+    Mirrors the outcome of a :class:`SourceBatch` for audit and replay. It
+    never carries credentials, paths or raw payloads - only counts, stable
+    warning codes, cursors and timestamps.
+    """
+
+    collection_run_id: str
+    source: str
+    scope_key: str
+    source_version: str
+    status: str
+    started_at: datetime
+    finished_at: datetime
+    cursor_in: Optional[str] = None
+    cursor_out: Optional[str] = None
+    item_count: int = 0
+    warning_count: int = 0
+    warnings: Tuple[str, ...] = ()
+    cursor_advanced: bool = False
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.collection_run_id or not self.source or not self.source_version:
+            raise ValueError(
+                "collection_run_id, source and source_version must not be empty"
+            )
+        object.__setattr__(self, "scope_key", validate_scope_key(self.scope_key))
+        if self.status not in SOURCE_BATCH_STATUSES:
+            raise ValueError("invalid source run status: %r" % self.status)
+        object.__setattr__(
+            self, "item_count", _non_negative_int(self.item_count, "item_count")
+        )
+        object.__setattr__(
+            self, "warning_count", _non_negative_int(self.warning_count, "warning_count")
+        )
+        object.__setattr__(self, "warnings", as_tuple(self.warnings))
+        if not all(isinstance(warning, str) for warning in self.warnings):
+            raise TypeError("warnings must contain strings")
+        if self.warning_count != len(self.warnings):
+            raise ValueError("warning_count must equal the number of warnings")
+        for name in ("cursor_in", "cursor_out"):
+            cursor = getattr(self, name)
+            if cursor is not None and (
+                not isinstance(cursor, str) or not cursor.strip()
+            ):
+                raise ValueError("%s must be a non-empty string or None" % name)
+        if not isinstance(self.cursor_advanced, bool):
+            raise TypeError("cursor_advanced must be a bool")
+        if self.cursor_advanced and (
+            self.status != "success"
+            or self.cursor_out is None
+            or self.cursor_out == self.cursor_in
+        ):
+            raise ValueError(
+                "cursor_advanced requires a successful run with a changed cursor"
+            )
+        if self.id == "":
+            object.__setattr__(self, "id", generate_run_id())
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        _normalize_datetimes(self, ("started_at", "finished_at", "created_at"))
+        if self.finished_at < self.started_at:
+            raise ValueError("finished_at must not be earlier than started_at")
+
+
+@dataclass(frozen=True)
+class SourceCursor:
+    """The current pagination cursor for a single ``(source, scope_key)``.
+
+    Cursor progress is isolated per scope: each scope keeps its own row, so
+    different GitHub query scopes advance independently. The cursor is only
+    advanced by the pipeline, and only on a fully successful batch that
+    supplies a distinct, non-null next cursor.
+    """
+
+    source: str
+    scope_key: str
+    source_version: str
+    last_run_id: str
+    updated_at: datetime
+    cursor: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.source or not self.source_version or not self.last_run_id:
+            raise ValueError(
+                "source, source_version and last_run_id must not be empty"
+            )
+        object.__setattr__(self, "scope_key", validate_scope_key(self.scope_key))
+        if not isinstance(self.cursor, str) or not self.cursor.strip():
+            raise ValueError("cursor must be a non-empty string")
+        _normalize_datetimes(self, ("updated_at",))

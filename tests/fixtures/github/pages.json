@@ -1,0 +1,73 @@
+{
+  "source_version": "fixture-1",
+  "pages": [
+    {
+      "cursor_in": null,
+      "cursor_out": "c1",
+      "fetched_at": "2026-08-13T00:00:00+00:00",
+      "items": [
+        {
+          "id": 101,
+          "full_name": "example-org/example-alpha",
+          "html_url": "https://example.com/example-org/example-alpha",
+          "description": "alpha example repository",
+          "language": "Python",
+          "stargazers_count": 10,
+          "forks_count": 1,
+          "topics": ["example", "alpha"],
+          "pushed_at": "2026-08-01T00:00:00+00:00",
+          "updated_at": "2026-08-02T00:00:00+00:00"
+        },
+        {
+          "id": 102,
+          "full_name": "example-org/example-beta",
+          "html_url": "https://example.com/example-org/example-beta",
+          "description": "beta example repository",
+          "language": "Rust",
+          "stargazers_count": 20,
+          "forks_count": 2,
+          "topics": ["example"],
+          "pushed_at": "2026-08-03T00:00:00+00:00",
+          "updated_at": "2026-08-04T00:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "cursor_in": "c1",
+      "cursor_out": "c2",
+      "fetched_at": "2026-08-13T00:00:01+00:00",
+      "items": [
+        {
+          "id": 101,
+          "full_name": "example-org/example-alpha",
+          "html_url": "https://example.com/example-org/example-alpha",
+          "description": "alpha example repository",
+          "language": "Python",
+          "stargazers_count": 10,
+          "forks_count": 1,
+          "topics": ["example", "alpha"],
+          "pushed_at": "2026-08-01T00:00:00+00:00",
+          "updated_at": "2026-08-02T00:00:00+00:00"
+        },
+        {
+          "id": 103,
+          "full_name": "example-org/example-gamma",
+          "html_url": "https://example.com/example-org/example-gamma",
+          "description": "gamma example repository",
+          "language": "Go",
+          "stargazers_count": 30,
+          "forks_count": 3,
+          "topics": ["example", "gamma"],
+          "pushed_at": "2026-08-05T00:00:00+00:00",
+          "updated_at": "2026-08-06T00:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "cursor_in": "c2",
+      "cursor_out": "c2",
+      "fetched_at": "2026-08-13T00:00:02+00:00",
+      "items": []
+    }
+  ]
+}
