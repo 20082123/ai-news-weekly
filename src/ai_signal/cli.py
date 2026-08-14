@@ -120,6 +120,35 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required gate to enable a real network request",
     )
+
+    # materialize ------------------------------------------------------------
+    p_mat = sub.add_parser("materialize", help="build material packs from collected data")
+    mat_sub = p_mat.add_subparsers(dest="materialize_command", required=True)
+    p_mat_gh = mat_sub.add_parser("github", help="materialize GitHub raw signals")
+    p_mat_gh.add_argument("--db-path", dest="db_path", required=True)
+    p_mat_gh.add_argument("--week-key", dest="week_key", required=True)
+    p_mat_gh.add_argument("--scope-key", dest="scope_key", required=True)
+    p_mat_gh.add_argument("--output-root", dest="output_root", required=True)
+    p_mat_gh.add_argument("--limit", type=int, default=10)
+    p_mat_gh.add_argument(
+        "--allow-output-write",
+        dest="allow_output_write",
+        action="store_true",
+        help="required gate to write Markdown files",
+    )
+
+    # feedback ---------------------------------------------------------------
+    p_fb = sub.add_parser("feedback", help="sync human feedback into the database")
+    fb_sub = p_fb.add_subparsers(dest="feedback_command", required=True)
+    p_fb_sync = fb_sub.add_parser("sync", help="scan inbox and sync feedback")
+    p_fb_sync.add_argument("--db-path", dest="db_path", required=True)
+    p_fb_sync.add_argument("--inbox-dir", dest="inbox_dir", required=True)
+    p_fb_sync.add_argument(
+        "--allow-feedback-write",
+        dest="allow_feedback_write",
+        action="store_true",
+        help="required gate to write feedback rows",
+    )
     return parser
 
 
@@ -389,6 +418,144 @@ def cmd_collect_github_live(args, out) -> int:
     return EXIT_CAPABILITY
 
 
+def cmd_materialize_github(args, out) -> int:
+    if not _WEEK_KEY_RE.match(args.week_key):
+        out.write("invalid week key: expected YYYY-Www\n")
+        return EXIT_CONFIG_ERROR
+    try:
+        validate_scope_key(args.scope_key)
+    except (TypeError, ValueError):
+        out.write("invalid scope key\n")
+        return EXIT_CONFIG_ERROR
+    if not isinstance(args.limit, int) or isinstance(args.limit, bool) or not 1 <= args.limit <= 50:
+        out.write("invalid limit\n")
+        return EXIT_CONFIG_ERROR
+
+    if not args.allow_output_write:
+        out.write("output write not allowed: --allow-output-write is required\n")
+        return EXIT_SECURITY
+
+    from pathlib import Path
+
+    from .outputs.markdown import MarkdownPublishError, publish_pack_markdown
+    from .pipeline.materialize import materialize_github
+    from .pipeline.package import build_and_store_pack
+    from .storage import sqlite as sqlite_storage
+
+    try:
+        sqlite_storage.initialize_database(args.db_path)
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+
+    # Phase 1: materialize + validate + persist packs + packaged state, all in
+    # one SQLite transaction. Markdown artifacts are prepared in memory only.
+    artifacts = []  # (pack_id, event_id, content, claim_evidence_links)
+    conn = sqlite_storage._open(args.db_path)
+    try:
+        conn.execute("BEGIN")
+        mat_result = materialize_github(
+            conn, args.week_key, args.scope_key, args.limit
+        )
+        packs_built = 0
+        for touch in mat_result.events:
+            pr = build_and_store_pack(
+                conn,
+                week_key=args.week_key,
+                event_id=touch.event_id,
+                signal_id=touch.signal_id,
+                title=touch.title,
+                claims=touch.claims,
+            )
+            if pr is None:
+                continue
+            packs_built += 1
+            artifacts.append(
+                (pr.pack_id, touch.event_id, pr.content, pr.claim_evidence_links)
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        conn.close()
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    conn.close()
+
+    # Phase 2: publish Markdown AFTER the DB commit. A publish failure keeps
+    # the committed packs and is reported as an output error, never a database
+    # error; a re-run can safely补写 any missing file.
+    output_failed = False
+    for pack_id, event_id, content, links in artifacts:
+        try:
+            publish_pack_markdown(
+                Path(args.output_root), pack_id, event_id, args.week_key, content, links
+            )
+        except MarkdownPublishError:
+            output_failed = True
+
+    out.write("processed: %d\n" % mat_result.processed)
+    out.write("signals_created: %d\n" % mat_result.signals_created)
+    out.write("signals_updated: %d\n" % mat_result.signals_updated)
+    out.write("events_created: %d\n" % mat_result.events_created)
+    out.write("claims_created: %d\n" % mat_result.claims_created)
+    out.write("packs: %d\n" % packs_built)
+    out.write("quarantined: %d\n" % mat_result.quarantined)
+
+    if output_failed:
+        out.write("output error\n")
+        return EXIT_CAPABILITY
+    return EXIT_OK
+
+
+def cmd_feedback_sync(args, out) -> int:
+    from pathlib import Path
+
+    from .feedback.sync import FeedbackSyncError, sync_feedback
+    from .storage import sqlite as sqlite_storage
+
+    if not args.allow_feedback_write:
+        out.write("feedback write not allowed: --allow-feedback-write is required\n")
+        return EXIT_SECURITY
+
+    try:
+        sqlite_storage.initialize_database(args.db_path)
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+
+    conn = sqlite_storage._open(args.db_path)
+    try:
+        conn.execute("BEGIN")
+        result = sync_feedback(conn, Path(args.inbox_dir))
+        conn.execute("COMMIT")
+    except sqlite_storage.StorageError:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        conn.close()
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    except FeedbackSyncError:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        conn.close()
+        out.write("feedback error\n")
+        return EXIT_CONFIG_ERROR
+    conn.close()
+
+    out.write("scanned: %d\n" % result.scanned)
+    out.write("inserted: %d\n" % result.inserted)
+    out.write("skipped: %d\n" % result.skipped)
+    out.write("invalid: %d\n" % result.invalid)
+    return EXIT_OK
+
+
 def main(argv: Optional[list] = None, out=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -406,6 +573,10 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_collect_github(args, stream)
     if args.command == "collect" and args.collect_command == "github-live":
         return cmd_collect_github_live(args, stream)
+    if args.command == "materialize" and args.materialize_command == "github":
+        return cmd_materialize_github(args, stream)
+    if args.command == "feedback" and args.feedback_command == "sync":
+        return cmd_feedback_sync(args, stream)
 
     parser.print_help(stream)
     return EXIT_OK

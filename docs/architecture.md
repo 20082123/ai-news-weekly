@@ -198,10 +198,75 @@ Query and cursor safety:
 
 ### What is still deliberately out of scope
 
-* Signal cards, claim/evidence, multi-angle packs, Markdown, Obsidian,
-  feedback sync, X, Reddit, Agent-Reach, auto-publish and email switching.
+* X, Reddit, Agent-Reach, Tavily, LLM-based summarization, auto-publish and
+  email switching.
 * `main.py` and the GitHub Actions workflow remain unchanged; production still
   runs `python main.py`. A real GitHub smoke run is performed manually only.
+
+## Phase 2B2: deterministic materialization (offline, no LLM)
+
+Phase 2B2 closes the loop from collected `raw_signal` to human-editable
+Markdown inbox and feedback sync, entirely deterministically and offline:
+
+```
+select_github_raw_signals(week_key, scope_key, limit)
+  → normalize/dedup → Signal (canonical_key = github:repository:<id>)
+  → one deterministic Event per repository
+  → factual Claims from snapshot fields only
+  → Evidence anchored to raw_signal
+  → ClaimEvidence (supports)
+  → A–F MaterialPack (canonical JSON → stable bundle_hash → stable pack id)
+  → Markdown Inbox/<pack_id>.md (atomic write, frontmatter preserved)
+  → feedback sync: parse frontmatter → deterministic Feedback row
+```
+
+Key design rules:
+
+* **Scope isolation via observation attribution.** `raw_signal` is
+  content-addressed and globally deduplicated, so its `collection_run_id`
+  alone cannot isolate multiple scopes. Each collection writes a
+  `raw_signal_observation` row linking the `source_run` to the (possibly
+  shared) snapshot, and `select_github_raw_signals` joins
+  `raw_signal_observation → source_run → collection_run → raw_signal` filtered
+  by `(week_key, scope_key)`. Different scopes never mix, an overlapping
+  snapshot is visible to every scope that observed it, and within one scope
+  only the *latest* snapshot per repository is kept (deterministic
+  `(updated_at|pushed_at, observed_at, raw_signal.id)` ordering), with `limit`
+  applied after that deduplication.
+* **No LLM, no fabricated facts.** Claims are generated only from fields
+  present in the single API snapshot. "Trending" / "growing" claims are
+  forbidden. Each Claim must bind at least one Evidence; the validator checks
+  every claim *against its own* evidence only - numbers, full date/time tokens
+  and URLs must be traceable to that claim's bound evidence, never another
+  claim's.
+* **Untrusted-data handling.** `full_name`, `description`, `topics` are
+  sanitized: NUL/control characters rejected, HTML escaped, prompt-injection
+  markers detected. A poisoned `description` is replaced with a safe
+  placeholder; injection in an essential field (`full_name`, URL, timestamp)
+  quarantines the whole record while other records continue processing.
+  Repository URLs must be HTTPS on an allowed host (github.com, or the
+  reserved example domains via an explicit fixture policy); stars/forks must
+  be non-negative integers; timestamps must be tz-aware ISO.
+* **Idempotency.** All ids are deterministic (SHA-256 of canonical parts).
+  Re-running never duplicates Signal / Event / EventMember / Claim / Evidence /
+  ClaimEvidence / MaterialPack / Feedback rows. `SignalRepository.upsert` only
+  moves `last_seen_at` forward and only refreshes mutable fields from a
+  non-older observation, so it never resets a Signal that has already advanced.
+* **Single transaction, two-stage.** Materialization and packaging share one
+  `BEGIN/COMMIT`: Signals advance `collected → normalized → clustered →
+  verified`, and only after a MaterialPack row is persisted does a Signal
+  advance `verified → packaged` (compare-and-swap, so re-runs add no duplicate
+  transitions). A failure rolls back everything.
+* **Atomic Markdown (after commit).** Materialize + validate + persist packs +
+  packaged state commit first; Markdown is then published outside the
+  transaction via same-directory temp + `os.replace` (target proven inside
+  `output-root/Inbox`, symlink/`..` escapes rejected). A publish failure keeps
+  the committed packs and is reported as an output error, never a database
+  error; a re-run补写s any missing file.
+* **Feedback sync.** Scans first-level `.md` only; deterministic Feedback ids
+  prevent duplicate rows on re-sync; a changed decision appends a new row. A
+  database failure propagates so the whole sync transaction rolls back - a
+  single invalid file is skipped, never half-committed.
 
 ### What is deliberately not in 2A
 

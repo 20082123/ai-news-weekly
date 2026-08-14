@@ -24,6 +24,12 @@ TESTS = ROOT / "tests"
 # SHA-256 of migration 0001 as it was at the start of phase 2A.
 _MIGRATION_0001_SHA256 = "c30e25a1f6414edcd3cbc59d4113f642752f974e771ede10be3664c5ae752448"
 
+# SHA-256 of migration 0002 as frozen at phase 2B1 start.
+_MIGRATION_0002_SHA256 = "41920e4b7ec58327a4bb0cf52d904c0894d638ad4a8e647f51f2533444e5150f"
+
+# SHA-256 of migration 0003 as frozen at phase 2B2 (observation attribution).
+_MIGRATION_0003_SHA256 = "2695b62f772147f174ef2faf0d7bbc8dbecf28798651daf672967b14a5d81a0b"
+
 # SHA-256 of the legacy files as recorded in the phase-1 baseline fixture.
 _LEGACY_SHA256 = {
     "main.py": "693fb3504170449a72506d3b3db661000860aa6fda8852f6db80278eb6b307aa",
@@ -93,6 +99,22 @@ class FrozenBaselineTest(unittest.TestCase):
             "0001_initial.sql must never be modified; add a new migration instead",
         )
 
+    def test_migration_0002_is_unchanged(self):
+        actual = _sha256("src/ai_signal/storage/migrations/0002_source_collection.sql")
+        self.assertEqual(
+            actual,
+            _MIGRATION_0002_SHA256,
+            "0002_source_collection.sql must never be modified; add a new migration instead",
+        )
+
+    def test_migration_0003_is_unchanged(self):
+        actual = _sha256("src/ai_signal/storage/migrations/0003_raw_signal_observation.sql")
+        self.assertEqual(
+            actual,
+            _MIGRATION_0003_SHA256,
+            "0003_raw_signal_observation.sql must never be modified; add a new migration instead",
+        )
+
     def test_legacy_files_are_unchanged(self):
         for relative, expected in _LEGACY_SHA256.items():
             self.assertEqual(_sha256(relative), expected, "%s changed from baseline" % relative)
@@ -151,6 +173,20 @@ class FixtureHygieneTest(unittest.TestCase):
     def test_github_fixtures_are_clean(self):
         fixtures_dir = ROOT / "tests" / "fixtures" / "github"
         for name in ("pages.json", "malformed.json", "rest_search_page.json"):
+            text = (fixtures_dir / name).read_text(encoding="utf-8")
+            lowered = text.lower()
+            for forbidden in _FORBIDDEN_FIXTURE_SUBSTRINGS:
+                self.assertNotIn(forbidden, lowered, "%s contains %s" % (name, forbidden))
+            self.assertNotIn("@", text, "%s contains an email address" % name)
+            self.assertNotIn("github.com", text, "%s contains a real GitHub URL" % name)
+            self.assertTrue(
+                "example.com" in text or "example.org" in text or "example.net" in text,
+                "%s should use reserved example.* URLs" % name,
+            )
+
+    def test_material_fixtures_are_clean(self):
+        fixtures_dir = ROOT / "tests" / "fixtures" / "materials"
+        for name in ("repos.json",):
             text = (fixtures_dir / name).read_text(encoding="utf-8")
             lowered = text.lower()
             for forbidden in _FORBIDDEN_FIXTURE_SUBSTRINGS:

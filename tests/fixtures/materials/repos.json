@@ -1,0 +1,26 @@
+[
+  {
+    "id": 2001,
+    "full_name": "example-org/example-alpha",
+    "html_url": "https://example.com/example-org/example-alpha",
+    "description": "An example AI agent framework for testing.",
+    "language": "Python",
+    "stargazers_count": 42,
+    "forks_count": 7,
+    "topics": ["ai", "agents", "framework"],
+    "pushed_at": "2026-08-10T00:00:00+00:00",
+    "updated_at": "2026-08-11T00:00:00+00:00"
+  },
+  {
+    "id": 2002,
+    "full_name": "example-org/example-beta",
+    "html_url": "https://example.org/example-org/example-beta",
+    "description": "A minimal example library.",
+    "language": "Rust",
+    "stargazers_count": 15,
+    "forks_count": 3,
+    "topics": ["library"],
+    "pushed_at": "2026-08-09T00:00:00+00:00",
+    "updated_at": "2026-08-12T00:00:00+00:00"
+  }
+]

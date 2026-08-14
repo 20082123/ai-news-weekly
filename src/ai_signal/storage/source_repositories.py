@@ -2,6 +2,7 @@
 
 * :class:`SourceRunRepository` - insert / get / list per collection run
 * :class:`SourceCursorRepository` - read and advance the per-scope cursor
+* :class:`RawSignalObservationRepository` - per-run observation attribution
 
 Cursor progress is isolated by ``(source, scope_key)``: each scope keeps its
 own row, so different GitHub query scopes advance independently.
@@ -22,7 +23,7 @@ import json
 from datetime import datetime
 from typing import List, Optional
 
-from ..domain.models import SourceCursor, SourceRun, ensure_aware_utc
+from ..domain.models import SourceCursor, SourceRun, ensure_aware_utc, now_utc
 from .sqlite import StorageError
 
 
@@ -187,3 +188,34 @@ class SourceCursorRepository:
             updated_at=_parse_dt(row["updated_at"]),
             cursor=row["cursor"],
         )
+
+
+class RawSignalObservationRepository:
+    """Records that a specific ``source_run`` observed a ``raw_signal``.
+
+    ``raw_signal`` is content-addressed and globally deduplicated, so its own
+    ``collection_run_id`` only records the first run that saw that content. A
+    snapshot collected again by another scope or another week is recorded here
+    (one row per ``(source_run_id, raw_signal_id)``), preserving the
+    observation attribution without duplicating the snapshot.
+    """
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def insert(self, source_run_id: str, raw_signal_id: str, observed_at) -> None:
+        """Record one observation. Idempotent per ``(source_run_id, raw_signal_id)``.
+
+        Any database failure propagates as :class:`StorageError` so the caller's
+        whole batch transaction rolls back; this repository never commits.
+        """
+        try:
+            self.conn.execute(
+                "INSERT INTO raw_signal_observation "
+                "(source_run_id, raw_signal_id, observed_at, created_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(source_run_id, raw_signal_id) DO NOTHING",
+                (source_run_id, raw_signal_id, _iso(observed_at), _iso(now_utc())),
+            )
+        except Exception as exc:  # noqa: BLE001 - surface as StorageError
+            raise _wrap("observation insert") from exc

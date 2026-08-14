@@ -30,6 +30,9 @@ _EXPECTED_TABLES = (
     "metric_snapshot",
     "score_log",
     "delivery_run",
+    "source_run",
+    "source_cursor",
+    "raw_signal_observation",
 )
 
 
@@ -200,6 +203,59 @@ class MigrationsTest(unittest.TestCase):
             ).fetchone()
         self.assertEqual(value, "keep-me")
         self.assertIsNone(migration_table)
+
+    def test_migration_0003_backfills_existing_observations(self):
+        # Simulate a pre-0003 database (0001 + 0002 only) with legacy data.
+        old_dir = pathlib.Path(self.tmp) / "old_migrations"
+        old_dir.mkdir()
+        real_dir = pathlib.Path(S._MIGRATIONS_DIR)
+        for name in ("0001_initial.sql", "0002_source_collection.sql"):
+            shutil.copy2(real_dir / name, old_dir)
+        ts = "2026-08-14T00:00:00+00:00"
+        original = S._MIGRATIONS_DIR
+        S._MIGRATIONS_DIR = old_dir
+        try:
+            S.initialize_database(self.db)
+            conn = S._open(self.db)
+            conn.execute("BEGIN")
+            conn.execute(
+                "INSERT INTO collection_run (id, week_key, started_at, status, "
+                "config_snapshot, created_at) VALUES (?,?,?,?,?,?)",
+                ("r1", "2026-W33", ts, "success", "{}", ts),
+            )
+            conn.execute(
+                "INSERT INTO source_run (id, collection_run_id, source, scope_key, "
+                "source_version, status, started_at, finished_at, item_count, "
+                "warning_count, warnings, cursor_advanced, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("sr1", "r1", "github", "scope-a-v1", "github-rest-v1", "success",
+                 ts, ts, 1, 0, "[]", 0, ts),
+            )
+            conn.execute(
+                "INSERT INTO raw_signal (id, collection_run_id, source, external_id, "
+                "payload, payload_sha256, source_version, collected_at, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("rs1", "r1", "github", "101", "{}", "h" * 64, "github-rest-v1", ts, ts),
+            )
+            conn.execute("COMMIT")
+            conn.close()
+        finally:
+            S._MIGRATIONS_DIR = original
+
+        # Re-initialize with the real migrations: 0003 applies and backfills.
+        status = S.initialize_database(self.db)
+        self.assertEqual(status["latest_applied"], 3)
+        conn = S._open(self.db)
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM raw_signal_observation").fetchone()[0]
+            self.assertEqual(count, 1)
+            row = conn.execute(
+                "SELECT source_run_id, raw_signal_id, observed_at FROM raw_signal_observation"
+            ).fetchone()
+            self.assertEqual((row["source_run_id"], row["raw_signal_id"]), ("sr1", "rs1"))
+            self.assertEqual(row["observed_at"], ts)
+        finally:
+            conn.close()
 
     def test_temp_directory_cleanup_pattern(self):
         tmp = tempfile.mkdtemp(prefix="ai_signal_tmp_")

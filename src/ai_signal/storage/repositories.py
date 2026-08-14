@@ -175,9 +175,22 @@ class SignalRepository:
         self.conn = conn
 
     def upsert(self, signal: Signal) -> Signal:
-        """Insert ``signal`` or return the existing record (no duplicate row)."""
+        """Insert ``signal`` or conditionally refresh the existing record.
+
+        ``signal.last_seen_at`` carries the observation time (the raw signal
+        ``collected_at``), never a wall-clock build time. On conflict:
+
+        * ``first_seen_at``, ``created_at`` and ``state`` are preserved;
+        * ``last_seen_at`` only moves forward;
+        * ``raw_signal_id`` / ``collection_run_id`` / ``title`` / ``url`` /
+          ``payload`` / ``updated_at`` are replaced only when the new
+          observation is not older than the current one, so processing an old
+          week or an old snapshot never overwrites a newer Signal.
+
+        The ``state`` column is advanced separately via :meth:`advance_state`.
+        """
         try:
-            self.conn.execute(
+            cur = self.conn.execute(
                 "INSERT INTO signal "
                 "(id, collection_run_id, source, canonical_key, raw_signal_id, "
                 " title, url, signal_type, state, first_seen_at, last_seen_at, "
@@ -201,19 +214,86 @@ class SignalRepository:
                     json.dumps(signal.payload, ensure_ascii=False),
                 ),
             )
+            inserted = cur.rowcount == 1
         except Exception as exc:  # noqa: BLE001
             raise _wrap(exc) from exc
-        row = self.conn.execute(
-            "SELECT * FROM signal WHERE source = ? AND canonical_key = ?",
-            (signal.source, signal.canonical_key),
-        ).fetchone()
-        return self._from_row(row)
+
+        existing = self._from_row(self._fetch_by_key(signal.source, signal.canonical_key))
+        if inserted:
+            return existing
+
+        # Existing row: refresh monotonically.
+        new_observed = signal.last_seen_at
+        if new_observed is None or existing.last_seen_at is None:
+            return existing
+        if new_observed < existing.last_seen_at:
+            return existing
+        try:
+            self.conn.execute(
+                "UPDATE signal SET "
+                " last_seen_at = ?, raw_signal_id = ?, collection_run_id = ?, "
+                " title = ?, url = ?, payload = ?, updated_at = ? "
+                "WHERE id = ?",
+                (
+                    _iso(new_observed),
+                    signal.raw_signal_id,
+                    signal.collection_run_id,
+                    signal.title,
+                    signal.url,
+                    json.dumps(signal.payload, ensure_ascii=False),
+                    _iso(signal.updated_at),
+                    existing.id,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise _wrap(exc) from exc
+        return self._from_row(self._fetch_by_key(signal.source, signal.canonical_key))
+
+    def _fetch_by_key(self, source: str, canonical_key: str):
+        try:
+            return self.conn.execute(
+                "SELECT * FROM signal WHERE source = ? AND canonical_key = ?",
+                (source, canonical_key),
+            ).fetchone()
+        except Exception as exc:  # noqa: BLE001
+            raise _wrap(exc) from exc
 
     def get(self, signal_id: str) -> Optional[Signal]:
-        row = self.conn.execute(
-            "SELECT * FROM signal WHERE id = ?", (signal_id,)
-        ).fetchone()
+        try:
+            row = self.conn.execute(
+                "SELECT * FROM signal WHERE id = ?", (signal_id,)
+            ).fetchone()
+        except Exception as exc:  # noqa: BLE001
+            raise _wrap(exc) from exc
         return self._from_row(row) if row else None
+
+    def get_state(self, signal_id: str) -> Optional[str]:
+        """Return the current ``state`` of a signal, or ``None`` if absent."""
+        try:
+            row = self.conn.execute(
+                "SELECT state FROM signal WHERE id = ?", (signal_id,)
+            ).fetchone()
+        except Exception as exc:  # noqa: BLE001
+            raise _wrap(exc) from exc
+        return row["state"] if row else None
+
+    def advance_state(self, signal_id: str, from_state: str, to_state: str) -> bool:
+        """Atomically advance ``state`` only if it currently equals ``from_state``.
+
+        The guarded ``WHERE id = ? AND state = ?`` is a compare-and-swap: it
+        returns ``True`` only when this call actually performed the transition,
+        so concurrent or repeated runs cannot double-advance or regress a
+        state. The accompanying ``state_transition`` audit append must happen
+        in the same transaction as the caller's.
+        """
+        try:
+            cur = self.conn.execute(
+                "UPDATE signal SET state = ? WHERE id = ? AND state = ?",
+                (to_state, signal_id, from_state),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise _wrap(exc) from exc
+        return cur.rowcount == 1
 
     @staticmethod
     def _from_row(row) -> Signal:

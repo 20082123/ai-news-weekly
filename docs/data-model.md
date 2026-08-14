@@ -159,6 +159,24 @@ current pagination cursor, the `source_version`, the `last_run_id`
 (FK → `collection_run(id)`) and `updated_at`. `cursor` is non-null: it is only
 written when a successful batch supplies a distinct, non-null next cursor.
 
+### `raw_signal_observation` (migration 0003)
+
+`raw_signal` is **content-addressed and globally deduplicated** by
+`(source, external_id, payload_sha256)`; its `collection_run_id` only records
+the *first* run that saw that content. `raw_signal_observation` records every
+later observation of a snapshot, one row per `(source_run_id, raw_signal_id)`,
+with `observed_at` (the observation time) and `created_at`. This is how a
+snapshot collected by several scopes or several weeks stays attributable to
+each of them - `raw_signal.collection_run_id` alone is **not** sufficient to
+isolate multiple scopes.
+
+Three distinct record types now model collection:
+
+* **`raw_signal`** — the global, immutable, content-addressed snapshot.
+* **`raw_signal_observation`** — each run/scope/week's attribution of a
+  snapshot (many-to-many between `source_run` and `raw_signal`).
+* **`source_cursor`** — per-`(source, scope_key)` pagination progress.
+
 ### `scope_key` contract
 
 `scope_key` isolates collection progress between different logical GitHub
@@ -201,6 +219,48 @@ never the raw query. The cursor for the REST adapter is the stable form
 out) the cursor wraps back to `page:1`, so a scope is re-scanned
 periodically; SQLite dedup keeps `raw_signal` stable across re-scans.
 `raw_signal.source_version` is `github-rest-v1` for this adapter.
+
+## Phase 2B2: materialization data flow
+
+Phase 2B2 reuses the existing `signal`, `event`, `event_member`, `claim`,
+`evidence`, `claim_evidence`, `material_pack` and `feedback` tables without
+any schema change. The data flow is:
+
+* **Raw selection** — `select_github_raw_signals` joins
+  `raw_signal_observation → source_run → collection_run → raw_signal` filtered
+  by `(week_key, scope_key)`, so a content-addressed snapshot is visible to
+  every scope/week that observed it. It keeps only the *latest* snapshot per
+  repository (grouped by `external_id`, ordered by `updated_at|pushed_at`,
+  `observed_at`, `raw_signal.id`) and applies `limit` after that dedup - so
+  only one snapshot per repository is ever materialized and old snapshots
+  never overwrite newer ones. The observation time (`observed_at`), not the
+  raw_signal's first insert time, is what flows into the Signal.
+* **Signal** — `canonical_key = github:repository:<numeric_id>`.
+  `SignalRepository.upsert` preserves `first_seen_at` and `state` on conflict
+  (never resetting a progressed Signal); `last_seen_at` only moves forward
+  (driven by the observation `observed_at`, not wall-clock) and
+  `raw_signal_id`/`title`/`url`/`payload` are refreshed only from a non-older
+  observation.
+* **Event** — one per repository: `canonical_key =
+  github:event:repository:<numeric_id>`.
+* **EventMember** — links Event ↔ Signal, unique per pair.
+* **Claim / Evidence / ClaimEvidence** — factual claims derived only from
+  snapshot fields. A claim id is `deterministic_id("claim", event_id, text)`
+  (so changing stars/date yields a new claim); an evidence id includes the
+  `raw_signal_id` (so a new snapshot yields new evidence). Each Claim binds at
+  least one Evidence via `supports`; historical claims/evidence stay auditable
+  but are never included in the current pack.
+* **MaterialPack** — `bundle_hash = SHA256(canonical JSON(content))`; pack id
+  = `deterministic_id("material_pack", week_key, bundle_hash)`. The same
+  inputs always produce the same hash, pack id and Markdown filename.
+* **Feedback** — id = `deterministic_id("feedback", target_id, canonical
+  JSON(six feedback fields))`. Re-syncing the same file is idempotent; a
+  changed decision appends a new row.
+
+Signal state advances `collected → normalized → clustered → verified` during
+materialization, then `verified → packaged` after the MaterialPack row is
+persisted - all recorded in `state_transition` (compare-and-swap keeps
+re-runs idempotent).
 
 ## Data retention and the credentials-must-not-enter principle
 

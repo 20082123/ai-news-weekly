@@ -546,5 +546,69 @@ class CollectionPipelineTest(unittest.TestCase):
             self.assertIsNone(SourceCursorRepository(conn).get("github", "ai-agents-v1"))
 
 
+class ObservationAttributionTest(unittest.TestCase):
+    """Observation rows must preserve scope/week attribution of a deduplicated
+    raw_signal snapshot."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="ai_signal_obs_")
+        self.db = os.path.join(self.tmp, "test.db")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _collect(self, week="2026-W33", scope="scope-a-v1"):
+        client = FixtureGitHubClient(FIXTURES / "pages.json")
+        return collect_source_once(
+            self.db, "github", week, scope_key=scope, client=client,
+            config_snapshot=_config(client, scope),
+        )
+
+    def _count(self, table):
+        with S.connect(self.db) as conn:
+            return conn.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]
+
+    def test_overlap_scope_records_observation_per_run(self):
+        self._collect(scope="scope-a-v1")
+        self._collect(scope="scope-b-v1")
+        self.assertEqual(self._count("source_run"), 2)
+        self.assertEqual(self._count("raw_signal"), 2)              # global dedup
+        self.assertEqual(self._count("raw_signal_observation"), 4)  # 2 per run
+
+    def test_cross_week_same_snapshot_keeps_raw_dedup(self):
+        # Same page-1 snapshot observed in two different weeks (fresh scope per
+        # week -> both start from page 1). raw_signal stays deduplicated.
+        self._collect(week="2026-W32", scope="scope-w32-v1")
+        self._collect(week="2026-W33", scope="scope-w33-v1")
+        self.assertEqual(self._count("raw_signal"), 2)
+        self.assertEqual(self._count("raw_signal_observation"), 4)
+
+    def test_same_scope_rescan_each_run_has_observation(self):
+        # page1 -> 2 repos; page2 -> 1 dup + 1 new (3 distinct raw signals).
+        self._collect(scope="scope-a-v1")
+        self._collect(scope="scope-a-v1")
+        self.assertEqual(self._count("raw_signal"), 3)
+        self.assertEqual(self._count("raw_signal_observation"), 4)
+
+    def test_observation_write_failure_rolls_back_batch(self):
+        original = collect_module.RawSignalObservationRepository.insert
+
+        def boom(self, source_run_id, raw_signal_id, observed_at):
+            raise S.StorageError("injected failure")
+
+        collect_module.RawSignalObservationRepository.insert = boom
+        try:
+            with self.assertRaises(S.StorageError):
+                self._collect()
+        finally:
+            collect_module.RawSignalObservationRepository.insert = original
+
+        self.assertEqual(self._count("source_run"), 0)
+        self.assertEqual(self._count("raw_signal"), 0)
+        self.assertEqual(self._count("raw_signal_observation"), 0)
+        with S.connect(self.db) as conn:
+            self.assertIsNone(SourceCursorRepository(conn).get("github", "scope-a-v1"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -222,3 +222,57 @@ python -m ai_signal collect github-live `
 CLI 输出仍只包含 run id、状态、处理数量、warning 数和 cursor 是否推进；不会打印
 query、query_sha256、scope_key、请求/项目 URL、数据库路径、header、响应正文、
 payload 或异常原文。
+
+### 第二阶段 2B2：确定性素材闭环（离线，不使用 LLM）
+
+2B2 在已采集 `raw_signal` 的基础上，构建一条纯确定性的素材生产闭环：
+
+```
+raw_signal → 规范化/去重 → 信号卡 → Event → Claim-Evidence
+→ A–F 多角度素材包 → Markdown Inbox → 人工编辑 frontmatter → feedback sync 写入 SQLite
+```
+
+明确说明：
+
+- **本阶段不使用 LLM，不访问网络，不写真实 Obsidian Vault**。
+- 所有事实 Claim 仅从 GitHub API 单次快照的已有字段确定性生成（full_name、URL、
+  pushed/updated_at、stars、forks、language、topics），不得生成“正在爆火”等无法
+  从单次快照证明的结论。
+- 每个 Claim 至少绑定一个 Evidence，数字/日期/URL 必须可追溯到绑定 Evidence。
+- `config_snapshot` 只保存 `query_sha256`，不保存原始 query。
+- 采集进度按三种记录区分：`raw_signal`（全局、内容寻址、不可变快照）、
+  `raw_signal_observation`（每次 run/scope/week 对某个快照的观察归属）、
+  `source_cursor`（按 `(source, scope_key)` 保存查询进度）。同一个快照被多个
+  scope 或多个周次观察时不会重复写入 `raw_signal`，而是各自记录一条 observation，
+  因此不能仅靠 `raw_signal.collection_run_id` 来隔离多个 scope。
+- `main.py` 和 GitHub Actions **仍未切换**。
+
+#### materialize 命令
+
+```bash
+PYTHONPATH=src python -m ai_signal materialize github \
+  --db-path ./.ai-signal/ai_signal.db \
+  --week-key 2026-W33 \
+  --scope-key ai-agents-v1 \
+  --output-root ./.ai-signal \
+  --limit 10 \
+  --allow-output-write
+```
+
+- 缺少 `--allow-output-write` 时返回退出码 `4`，不创建目录、不改数据库、不写 Markdown。
+- 仅在 `output-root/Inbox/` 下写入 `<material_pack_id>.md`，文件名来自稳定哈希 ID。
+- 重复运行不新增文件；人工填写的六个反馈字段被保留，只更新机器生成正文。
+- CLI 输出只含安全计数，不含路径、URL、payload、query 或 scope_key。
+
+#### feedback sync 命令
+
+```bash
+PYTHONPATH=src python -m ai_signal feedback sync \
+  --db-path ./.ai-signal/ai_signal.db \
+  --inbox-dir ./.ai-signal/Inbox \
+  --allow-feedback-write
+```
+
+- 缺少 `--allow-feedback-write` 时返回退出码 `4`，不改数据库。
+- 仅扫描 inbox 第一层 `.md` 文件，不递归，不读 symlink。
+- 输出仅含 `scanned`、`inserted`、`skipped`、`invalid` 计数。

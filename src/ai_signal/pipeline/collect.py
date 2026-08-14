@@ -46,7 +46,11 @@ from ..observability.logging import StructuredLogger
 from ..sources.github import GitHubClient, GitHubSource
 from ..storage import sqlite as sqlite_storage
 from ..storage.repositories import CollectionRunRepository, RawSignalRepository
-from ..storage.source_repositories import SourceCursorRepository, SourceRunRepository
+from ..storage.source_repositories import (
+    RawSignalObservationRepository,
+    SourceCursorRepository,
+    SourceRunRepository,
+)
 
 
 class CollectionPolicyError(Exception):
@@ -289,7 +293,7 @@ def collect_source_once(
     pending_exc: Optional[Exception] = None
     try:
         conn.execute("BEGIN")
-        SourceRunRepository(conn).insert(
+        source_run = SourceRunRepository(conn).insert(
             SourceRun(
                 collection_run_id=run.id,
                 source=source,
@@ -308,8 +312,11 @@ def collect_source_once(
             )
         )
         raw_repo = RawSignalRepository(conn)
+        obs_repo = RawSignalObservationRepository(conn)
         for item in batch.items:
-            raw_repo.upsert(
+            # ``stored`` is the canonical raw_signal row, which may be a
+            # globally-deduplicated existing row for a snapshot seen before.
+            stored = raw_repo.upsert(
                 RawSignal(
                     collection_run_id=run.id,
                     source=source,
@@ -320,6 +327,10 @@ def collect_source_once(
                     source_version=batch.source_version,
                 )
             )
+            # Attribute this observation of the (possibly shared) snapshot to
+            # the current source_run, so materialization can select it per
+            # (week_key, scope_key) even when the raw content was deduplicated.
+            obs_repo.insert(source_run.id, stored.id, item.collected_at)
         if advance_cursor:
             SourceCursorRepository(conn).advance(
                 SourceCursor(
