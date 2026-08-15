@@ -252,6 +252,84 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_evc_promo.add_argument("--db-path", dest="db_path", required=True)
     p_evc_promo.add_argument("--week-key", dest="week_key", required=True)
+
+    # research (2D) -----------------------------------------------------------
+    p_res = sub.add_parser(
+        "research", help="build/show research dossiers (phase 2D)"
+    )
+    res_sub = p_res.add_subparsers(dest="research_command", required=True)
+    p_res_build = res_sub.add_parser("build", help="build a GitHub research dossier")
+    p_res_build.add_argument("--db-path", dest="db_path", required=True)
+    p_res_build.add_argument("--event-id", dest="event_id", required=True)
+    p_res_build.add_argument("--timeout", type=int, default=10)
+    p_res_build.add_argument(
+        "--allow-network",
+        dest="allow_network",
+        action="store_true",
+        help="required gate for README/Release fetches",
+    )
+    p_res_show = res_sub.add_parser("show", help="show a dossier with its facts")
+    p_res_show.add_argument("--db-path", dest="db_path", required=True)
+    p_res_show.add_argument("--event-id", dest="event_id", required=True)
+    p_res_evid = res_sub.add_parser(
+        "add-evidence",
+        help="attach one official first-party page to the latest dossier",
+    )
+    p_res_evid.add_argument("--db-path", dest="db_path", required=True)
+    p_res_evid.add_argument("--event-id", dest="event_id", required=True)
+    p_res_evid.add_argument("--url", required=True)
+    p_res_evid.add_argument("--kind", default="fact", help="fact | official_claim")
+    p_res_evid.add_argument("--timeout", type=int, default=10)
+    p_res_evid.add_argument(
+        "--allow-network",
+        dest="allow_network",
+        action="store_true",
+        help="required gate for the official page fetch",
+    )
+
+    # editorial (2E) ----------------------------------------------------------
+    p_ed = sub.add_parser("editorial", help="editorial decisions (phase 2E)")
+    ed_sub = p_ed.add_subparsers(dest="editorial_command", required=True)
+    p_ed_decide = ed_sub.add_parser("decide", help="decide on the latest dossier")
+    p_ed_decide.add_argument("--db-path", dest="db_path", required=True)
+    p_ed_decide.add_argument("--event-id", dest="event_id", required=True)
+
+    # content (2F) ------------------------------------------------------------
+    p_ct = sub.add_parser("content", help="content brief output (phase 2F)")
+    ct_sub = p_ct.add_subparsers(dest="content_command", required=True)
+    p_ct_brief = ct_sub.add_parser("brief", help="write one content brief file")
+    p_ct_brief.add_argument("--db-path", dest="db_path", required=True)
+    p_ct_brief.add_argument("--event-id", dest="event_id", required=True)
+    p_ct_brief.add_argument("--week-key", dest="week_key", required=True)
+    p_ct_brief.add_argument("--output-root", dest="output_root", required=True)
+    p_ct_brief.add_argument(
+        "--allow-output-write",
+        dest="allow_output_write",
+        action="store_true",
+        help="required gate to write brief files",
+    )
+
+    # weekly (Phase 3) --------------------------------------------------------
+    p_wk = sub.add_parser("weekly", help="weekly end-to-end run (Phase 3)")
+    wk_sub = p_wk.add_subparsers(dest="weekly_command", required=True)
+    p_wk_run = wk_sub.add_parser("run", help="discover -> research -> editorial -> brief")
+    p_wk_run.add_argument("--db-path", dest="db_path", required=True)
+    p_wk_run.add_argument("--week-key", dest="week_key", required=True)
+    p_wk_run.add_argument("--timeout", type=int, default=10)
+    p_wk_run.add_argument("--research-limit", dest="research_limit", type=int, default=5)
+    p_wk_run.add_argument(
+        "--allow-network",
+        dest="allow_network",
+        action="store_true",
+        help="required gate for discovery and research fetches",
+    )
+    p_wk_run.add_argument("--output-root", dest="output_root")
+    p_wk_run.add_argument(
+        "--allow-output-write",
+        dest="allow_output_write",
+        action="store_true",
+        help="optional: also write content brief files",
+    )
     return parser
 
 
@@ -1006,6 +1084,300 @@ def cmd_event_candidate(args, out) -> int:
     return EXIT_OK
 
 
+def cmd_research(args, out) -> int:
+    from pathlib import Path
+
+    from .pipeline.collect import CollectionPolicyError
+    from .pipeline.research import ResearchError, build_github_dossier
+    from .storage import sqlite as sqlite_storage
+    from .storage.research_repositories import (
+        EditorialDecisionRepository,
+        ResearchDossierRepository,
+        ResearchFactRepository,
+    )
+
+    def _hex64(value):
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(ch in "0123456789abcdef" for ch in value)
+        )
+
+    if args.research_command == "add-evidence":
+        from .pipeline.research import attach_official_evidence
+        from .sources.official_http import OfficialHttpError
+
+        if not _hex64(args.event_id):
+            out.write("config error: invalid event id\n")
+            return EXIT_CONFIG_ERROR
+        if isinstance(args.timeout, bool) or not isinstance(args.timeout, int) or not 1 <= args.timeout <= 30:
+            out.write("invalid timeout\n")
+            return EXIT_CONFIG_ERROR
+        try:
+            sqlite_storage.initialize_database(args.db_path)
+            conn = sqlite_storage._open(args.db_path)
+            try:
+                dossiers = ResearchDossierRepository(conn).list_for_event(args.event_id)
+                if not dossiers:
+                    out.write("no dossier for this event\n")
+                    return EXIT_CONFIG_ERROR
+                conn.execute("BEGIN")
+                fact = attach_official_evidence(
+                    conn,
+                    dossiers[0].id,
+                    args.url,
+                    allow_network=bool(args.allow_network),
+                    timeout_seconds=args.timeout,
+                    kind=args.kind,
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+        except CollectionPolicyError as exc:
+            out.write("policy error: %s\n" % exc)
+            return EXIT_SECURITY
+        except OfficialHttpError as exc:
+            out.write("evidence error: %s\n" % exc.code)
+            return EXIT_CAPABILITY
+        except ResearchError as exc:
+            out.write("config error: %s\n" % exc)
+            return EXIT_CONFIG_ERROR
+        except ValueError as exc:
+            out.write("config error: %s\n" % exc)
+            return EXIT_CONFIG_ERROR
+        except sqlite_storage.StorageError:
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        out.write("fact_id: %s\n" % fact.id)
+        out.write("kind: %s\n" % fact.kind)
+        out.write("chars: %d\n" % len(fact.text))
+        return EXIT_OK
+
+    if args.research_command == "show":
+        if not _hex64(args.event_id):
+            out.write("config error: invalid event id\n")
+            return EXIT_CONFIG_ERROR
+        if not Path(args.db_path).exists():
+            out.write("database does not exist\n")
+            return EXIT_DB_ERROR
+        try:
+            with sqlite_storage.connect(args.db_path) as conn:
+                dossiers = ResearchDossierRepository(conn).list_for_event(args.event_id)
+        except sqlite_storage.StorageError:
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        if not dossiers:
+            out.write("no dossier for this event\n")
+            return EXIT_OK
+        dossier = dossiers[0]
+        out.write("dossier_id: %s\n" % dossier.id)
+        out.write("status: %s\n" % dossier.status)
+        out.write("summary: %s\n" % dossier.summary_judgment)
+        out.write("needs_testing: %s\n" % ("yes" if dossier.needs_testing else "no"))
+        try:
+            with sqlite_storage.connect(args.db_path) as conn:
+                facts = ResearchFactRepository(conn).list_for_dossier(dossier.id)
+                decisions = EditorialDecisionRepository(conn).list_for_dossier(dossier.id)
+        except sqlite_storage.StorageError:
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        out.write("facts: %d\n" % len(facts))
+        for fact in facts:
+            source = fact.source_url or ""
+            out.write("  [%s] %s %s\n" % (fact.kind, fact.text[:120], source[:80]))
+        if decisions:
+            latest = decisions[0]
+            out.write("editorial: %s (%s)\n" % (
+                latest.decision, ",".join(latest.reason_codes)))
+        return EXIT_OK
+
+    # build
+    if not _hex64(args.event_id):
+        out.write("config error: invalid event id\n")
+        return EXIT_CONFIG_ERROR
+    if isinstance(args.timeout, bool) or not isinstance(args.timeout, int) or not 1 <= args.timeout <= 30:
+        out.write("invalid timeout\n")
+        return EXIT_CONFIG_ERROR
+    try:
+        sqlite_storage.initialize_database(args.db_path)
+        conn = sqlite_storage._open(args.db_path)
+        try:
+            conn.execute("BEGIN")
+            result = build_github_dossier(
+                conn,
+                args.event_id,
+                allow_network=bool(args.allow_network),
+                timeout_seconds=args.timeout,
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+    except CollectionPolicyError as exc:
+        out.write("policy error: %s\n" % exc)
+        return EXIT_SECURITY
+    except ResearchError as exc:
+        out.write("config error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    out.write("dossier_id: %s\n" % result.dossier.id)
+    out.write("status: %s\n" % result.status)
+    out.write("facts: %d\n" % len(result.facts))
+    out.write("fetch_failures: %d\n" % result.fetch_failures)
+    out.write("needs_testing: %s\n" % ("yes" if result.dossier.needs_testing else "no"))
+    return EXIT_OK
+
+
+def cmd_editorial(args, out) -> int:
+    from pathlib import Path
+
+    from .pipeline.editorial import EditorialError, decide_editorial
+    from .storage import sqlite as sqlite_storage
+    from .storage.research_repositories import ResearchDossierRepository
+
+    if not isinstance(args.event_id, str) or len(args.event_id) != 64:
+        out.write("config error: invalid event id\n")
+        return EXIT_CONFIG_ERROR
+    if not Path(args.db_path).exists():
+        out.write("database does not exist\n")
+        return EXIT_DB_ERROR
+    try:
+        sqlite_storage.initialize_database(args.db_path)
+        conn = sqlite_storage._open(args.db_path)
+        try:
+            dossiers = ResearchDossierRepository(conn).list_for_event(args.event_id)
+            if not dossiers:
+                out.write("no dossier for this event\n")
+                return EXIT_OK
+            conn.execute("BEGIN")
+            decision = decide_editorial(conn, dossiers[0].id)
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
+    except EditorialError as exc:
+        out.write("config error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    out.write("dossier_id: %s\n" % decision.dossier_id)
+    out.write("decision: %s\n" % decision.decision)
+    out.write("reason_codes: %s\n" % ",".join(decision.reason_codes))
+    return EXIT_OK
+
+
+def cmd_content(args, out) -> int:
+    from pathlib import Path
+
+    from .outputs.content_brief import ContentBriefError, publish_content_brief
+    from .storage import sqlite as sqlite_storage
+    from .storage.event_candidate_repositories import EventCandidateRepository
+    from .storage.research_repositories import (
+        EditorialDecisionRepository,
+        ResearchDossierRepository,
+        ResearchFactRepository,
+    )
+
+    if not _WEEK_KEY_RE.match(args.week_key):
+        out.write("invalid week key: expected YYYY-Www\n")
+        return EXIT_CONFIG_ERROR
+    if not isinstance(args.event_id, str) or len(args.event_id) != 64:
+        out.write("config error: invalid event id\n")
+        return EXIT_CONFIG_ERROR
+    if not args.allow_output_write:
+        out.write("output write not allowed: --allow-output-write is required\n")
+        return EXIT_SECURITY
+    if not Path(args.db_path).exists():
+        out.write("database does not exist\n")
+        return EXIT_DB_ERROR
+    try:
+        with sqlite_storage.connect(args.db_path) as conn:
+            event = EventCandidateRepository(conn).get(args.event_id)
+            dossiers = ResearchDossierRepository(conn).list_for_event(args.event_id)
+            if event is None or not dossiers:
+                out.write("no dossier for this event\n")
+                return EXIT_CONFIG_ERROR
+            dossier = dossiers[0]
+            facts = ResearchFactRepository(conn).list_for_dossier(dossier.id)
+            decisions = EditorialDecisionRepository(conn).list_for_dossier(dossier.id)
+            if not decisions:
+                out.write("no editorial decision; run `editorial decide` first\n")
+                return EXIT_CONFIG_ERROR
+            decision = decisions[0]
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    try:
+        path = publish_content_brief(
+            Path(args.output_root), args.week_key, event, dossier, facts, decision
+        )
+    except ContentBriefError:
+        out.write("output error\n")
+        return EXIT_CAPABILITY
+    out.write("written: %s\n" % path.name)
+    return EXIT_OK
+
+
+def cmd_weekly(args, out) -> int:
+    from .pipeline.collect import CollectionPolicyError
+    from .pipeline.weekly import WeeklyError, run_weekly
+    from .storage import sqlite as sqlite_storage
+
+    if not _WEEK_KEY_RE.match(args.week_key):
+        out.write("invalid week key: expected YYYY-Www\n")
+        return EXIT_CONFIG_ERROR
+    if isinstance(args.timeout, bool) or not isinstance(args.timeout, int) or not 1 <= args.timeout <= 30:
+        out.write("invalid timeout\n")
+        return EXIT_CONFIG_ERROR
+    try:
+        report = run_weekly(
+            args.db_path,
+            args.week_key,
+            allow_network=bool(args.allow_network),
+            output_root=args.output_root,
+            allow_output_write=bool(args.allow_output_write),
+            research_limit=args.research_limit,
+            timeout_seconds=args.timeout,
+        )
+    except CollectionPolicyError as exc:
+        out.write("policy error: %s\n" % exc)
+        return EXIT_SECURITY
+    except WeeklyError as exc:
+        out.write("config error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    out.write("discovery_policies: %d\n" % report.discovery_policies)
+    out.write("discovery_success: %d\n" % report.discovery_success)
+    out.write("discovery_degraded: %d\n" % report.discovery_degraded)
+    out.write("promoted: %d\n" % report.promoted)
+    out.write("already_promoted: %d\n" % report.already_promoted)
+    out.write("research_attempted: %d\n" % report.research_attempted)
+    out.write("dossiers_built: %d\n" % report.dossiers_built)
+    out.write("research_failures: %d\n" % report.research_failures)
+    out.write("decisions_ready: %d\n" % report.decisions_ready)
+    out.write("decisions_needs_testing: %d\n" % report.decisions_needs_testing)
+    out.write("decisions_watch: %d\n" % report.decisions_watch)
+    out.write("briefs_written: %d\n" % report.briefs_written)
+    if report.discovery_degraded or report.research_failures:
+        return EXIT_CAPABILITY
+    return EXIT_OK
+
+
 def main(argv: Optional[list] = None, out=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -1033,6 +1405,14 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_discover_github(args, stream)
     if args.command == "event-candidate":
         return cmd_event_candidate(args, stream)
+    if args.command == "research":
+        return cmd_research(args, stream)
+    if args.command == "editorial":
+        return cmd_editorial(args, stream)
+    if args.command == "content":
+        return cmd_content(args, stream)
+    if args.command == "weekly":
+        return cmd_weekly(args, stream)
 
     parser.print_help(stream)
     return EXIT_OK
