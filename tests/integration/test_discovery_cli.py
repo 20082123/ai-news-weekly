@@ -2,10 +2,12 @@
 
 The runner itself is covered end-to-end with a fake transport at the
 pipeline layer; here the CLI validates argument handling, exit codes, safe
-output and the mock-level happy path (no real network ever).
+output and a REAL-pipeline regression (the runner runs for real with an
+injected fake transport - no prefabricated result object, no real network).
 """
 
 import io
+import json
 import os
 import pathlib
 import shutil
@@ -13,17 +15,99 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "src"))
 
 from ai_signal.cli import main  # noqa: E402
+from ai_signal.discovery.policy import (  # noqa: E402
+    GitHubDiscoveryPolicy,
+    GitHubDiscoveryProbe,
+)
 from ai_signal.discovery.run import GitHubDiscoveryRunResult  # noqa: E402
+from ai_signal.sources.github_rest import HttpResponse  # noqa: E402
+from ai_signal.storage import sqlite as S  # noqa: E402
 
 EXIT_OK = 0
 EXIT_CONFIG_ERROR = 2
 EXIT_DB_ERROR = 3
 EXIT_SECURITY = 4
 EXIT_CAPABILITY = 5
+
+
+class _PartialSearchTransport:
+    """No-arg transport returning a page with one valid + one malformed item.
+
+    Patched over ``ai_signal.discovery.run.UrllibTransport`` so the REAL
+    runner performs the collection; the malformed item makes the batch
+    ``partial``. No network is ever touched.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def get(self, url, headers, timeout_seconds, max_response_bytes):
+        self.calls.append(url)
+        valid = {
+            "id": 1,
+            "full_name": "example-org/repo-1",
+            "html_url": "https://github.com/example-org/repo-1",
+            "description": (
+                "An AI agent harness that wraps multiple models for real "
+                "task automation with a substantive enough description."
+            ),
+            "topics": ["agent", "harness"],
+            "language": "Python",
+            "stargazers_count": 1,
+            "forks_count": 0,
+            "created_at": "2026-06-01T00:00:00+00:00",
+            "updated_at": "2026-08-10T00:00:00+00:00",
+            "pushed_at": "2026-08-10T00:00:00+00:00",
+            "homepage": None,
+            "fork": False,
+            "archived": False,
+            "disabled": False,
+            "is_template": False,
+        }
+        malformed = {
+            "id": 999,
+            "full_name": "example-org/broken",
+            "html_url": "https://github.com/example-org/broken",
+            # updated_at missing -> GitHubSource rejects the item -> partial
+        }
+        body = json.dumps(
+            {"total_count": 2, "items": [valid, malformed]}
+        ).encode("utf-8")
+        return HttpResponse(
+            status=200,
+            headers={"Content-Type": "application/json"},
+            body=body,
+            final_url="https://api.github.com/search/repositories",
+        )
+
+
+def _partial_policy():
+    return GitHubDiscoveryPolicy(
+        id="p-part-v1",
+        lane="emerging",
+        probes=(
+            GitHubDiscoveryProbe(
+                probe_id="p-part-v1-q1",
+                kind="search",
+                scope_key="ghp-part-v1-q1",
+                spec={
+                    "query": "topic:test-agent pushed:>2026-07-01",
+                    "sort": "updated",
+                    "order": "desc",
+                    "per_page": 25,
+                    "max_pages": 3,
+                },
+                priority=0,
+            ),
+        ),
+        candidate_limit=50,
+        research_budget=2,
+    )
 
 
 class DiscoverCliTest(unittest.TestCase):
@@ -194,9 +278,45 @@ class DiscoverCliTest(unittest.TestCase):
         # A read-only status must never create a database file.
         self.assertFalse(os.path.exists(self.db))
 
-    def test_status_requires_db_path(self):
+    def test_partial_status_requires_db_path(self):
         code, _ = self._run(["discover", "github", "--status"])
         self.assertEqual(code, EXIT_CONFIG_ERROR)
+
+    def test_real_pipeline_partial_run_exits_capability(self):
+        # Acceptance regression: a REAL pipeline run whose collection comes
+        # back partial must exit capability code 5 - not a mocked result.
+        import ai_signal.discovery.policy as policy_module
+
+        with mock.patch.object(
+            policy_module, "POLICY_CATALOG", {"p-part-v1": _partial_policy()}
+        ), mock.patch(
+            "ai_signal.discovery.run.UrllibTransport", _PartialSearchTransport
+        ):
+            code, text = self._run(
+                ["discover", "github", "--policy", "p-part-v1",
+                 "--db-path", self.db, "--week-key", "2026-W33",
+                 "--allow-network"]
+            )
+        self.assertEqual(code, EXIT_CAPABILITY)
+        self.assertIn("status: partial", text)
+        self.assertIn("research: 1", text)  # the valid item still qualified
+        # The probe run and the discovery run both recorded partial with the
+        # stable, payload-free warning code.
+        conn = S._open(self.db)
+        try:
+            probe = conn.execute(
+                "SELECT status, warning_count, warnings "
+                "FROM github_discovery_probe_run"
+            ).fetchone()
+            self.assertEqual(probe["status"], "partial")
+            self.assertEqual(probe["warning_count"], 1)
+            self.assertEqual(json.loads(probe["warnings"]), ["PROBE_PARTIAL"])
+            run = conn.execute(
+                "SELECT status FROM github_discovery_run"
+            ).fetchone()
+            self.assertEqual(run["status"], "partial")
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

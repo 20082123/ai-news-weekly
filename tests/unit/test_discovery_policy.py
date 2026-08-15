@@ -124,8 +124,8 @@ class PolicyValidationTest(unittest.TestCase):
             "id": "mature-v1",
             "lane": "mature",
             "probes": (
-                _search_probe("mature-v1-q1", "ghp-mature-v1-q1"),
-                _search_probe("mature-v1-q2", "ghp-mature-v1-q2"),
+                _search_probe("mature-v1-q1", "ghp-mature-v1-q1", priority=0),
+                _search_probe("mature-v1-q2", "ghp-mature-v1-q2", priority=1),
             ),
             "candidate_limit": 50,
             "research_budget": 5,
@@ -139,9 +139,9 @@ class PolicyValidationTest(unittest.TestCase):
         self.assertEqual(a.policy_hash, b.policy_hash)
         changed = self._policy(
             probes=(
-                _search_probe("mature-v1-q1", "ghp-mature-v1-q1",
+                _search_probe("mature-v1-q1", "ghp-mature-v1-q1", priority=0,
                               spec={"query": "different query"}),
-                _search_probe("mature-v1-q2", "ghp-mature-v1-q2"),
+                _search_probe("mature-v1-q2", "ghp-mature-v1-q2", priority=1),
             )
         )
         self.assertNotEqual(a.policy_hash, changed.policy_hash)
@@ -171,6 +171,33 @@ class PolicyValidationTest(unittest.TestCase):
         for bad in (-1, True, 1.5):
             with self.assertRaises(DiscoveryPolicyError):
                 self._policy(research_budget=bad)
+
+    def test_candidate_limit_bounds(self):
+        # 1..100 enforced; booleans rejected.
+        for bad in (0, 101):
+            with self.assertRaises(DiscoveryPolicyError):
+                self._policy(candidate_limit=bad, research_budget=0)
+        for ok in (1, 100):
+            policy = self._policy(candidate_limit=ok, research_budget=0)
+            self.assertEqual(policy.candidate_limit, ok)
+
+    def test_research_budget_bounds(self):
+        # 0..candidate_limit enforced: 0 is allowed, above the limit is not.
+        with self.assertRaises(DiscoveryPolicyError):
+            self._policy(research_budget=51)  # candidate_limit is 50
+        self.assertEqual(self._policy(research_budget=0).research_budget, 0)
+        self.assertEqual(
+            self._policy(research_budget=50).research_budget, 50
+        )
+
+    def test_duplicate_priorities_rejected(self):
+        with self.assertRaises(DiscoveryPolicyError):
+            self._policy(
+                probes=(
+                    _search_probe("p-a", "ghp-a-v1", priority=0),
+                    _search_probe("p-b", "ghp-b-v1", priority=0),
+                )
+            )
 
     def test_bad_lane_rejected(self):
         with self.assertRaises(DiscoveryPolicyError):

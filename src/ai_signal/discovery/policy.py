@@ -82,6 +82,14 @@ def _non_negative_int(value: Any, name: str) -> int:
     return value
 
 
+def _bounded_int(value: Any, low: int, high: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise DiscoveryPolicyError("%s must be an integer" % name)
+    if not (low <= value <= high):
+        raise DiscoveryPolicyError("%s must be between %d and %d" % (name, low, high))
+    return value
+
+
 def _validate_search_spec(spec: Mapping[str, Any]) -> Mapping[str, Any]:
     """Validate a GitHub repository-search probe spec (whitelist only)."""
     if not isinstance(spec, Mapping):
@@ -235,6 +243,11 @@ class GitHubDiscoveryPolicy:
             raise DiscoveryPolicyError("probe_ids must be unique within a policy")
         if len(set(scope_keys)) != len(scope_keys):
             raise DiscoveryPolicyError("scope_keys must be unique within a policy")
+        # Deterministic processing order: priorities must be unique so the
+        # numeric order (not tuple order) decides which probe wins a candidate.
+        priorities = [probe.priority for probe in probes]
+        if len(set(priorities)) != len(priorities):
+            raise DiscoveryPolicyError("probe priorities must be unique within a policy")
         object.__setattr__(self, "probes", probes)
         targets = tuple(self.ecosystem_targets)
         if not all(isinstance(target, EcosystemTargetSpec) for target in targets):
@@ -246,8 +259,11 @@ class GitHubDiscoveryPolicy:
         if len({target.target for target in targets}) != len(targets):
             raise DiscoveryPolicyError("ecosystem targets must be unique")
         object.__setattr__(self, "ecosystem_targets", targets)
-        _non_negative_int(self.candidate_limit, "candidate_limit")
-        _non_negative_int(self.research_budget, "research_budget")
+        # Budget boundaries: candidate_limit 1..100; research_budget must be
+        # within 0..candidate_limit (0 = nothing may be queued).
+        _bounded_int(self.candidate_limit, 1, 100, "candidate_limit")
+        limit = self.candidate_limit
+        _bounded_int(self.research_budget, 0, limit, "research_budget")
 
     @property
     def policy_hash(self) -> str:

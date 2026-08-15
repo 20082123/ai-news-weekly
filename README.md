@@ -424,7 +424,11 @@ GitHub-specific policy（四条 GitHub Discovery Lane）
   `ecosystem-v1` 50/5（候选上限 / 研究队列上限）。
 - 每条 probe 独占 `scope_key`；scope 与 probe spec hash 硬绑定（迁移 0005 的
   `github_discovery_scope_binding`），已存在游标的 scope 若新 spec 不同会在
-  **联网前**拒绝，新 query 永远不能继承旧 query 的分页游标。
+  **联网前**拒绝；绑定同时校验 policy/probe 所有者，任一不同同样联网前
+  blocked（`SCOPE_BINDING_OWNER_MISMATCH`）。同一 policy 内 probe 按唯一
+  priority 数值升序处理，priority 最小者赢得跨 probe 命中同一候选的归属。
+  probe 采集结果 `partial` 会原样保留并带 `PROBE_PARTIAL` 稳定码；顶层 run
+  只在全部 probe `success` 时才 `success`。
 - 超预算的 research 候选只标 `queue_state = over_budget`，qualification 决定
   绝不降级。
 - 输出不是全局 Signal、不是 Event、不产 A–F 素材、不产 Markdown 报告；只写

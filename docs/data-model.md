@@ -364,6 +364,9 @@ updated. Before a probe runs, the pipeline checks:
 
 * an existing binding with a different `spec_hash` -> `SCOPE_SPEC_MISMATCH`,
   refused before networking;
+* an existing binding whose `policy_id` or `probe_id` differs (same spec) ->
+  `SCOPE_BINDING_OWNER_MISMATCH`, refused before networking - one policy can
+  never ride another policy's scope;
 * no binding but a `source_cursor` row already exists for the scope (an
   unbound legacy scope such as `ai-agents-v1`) -> `SCOPE_UNBOUND_CURSOR`,
   refused before networking.
@@ -401,6 +404,20 @@ selection per candidate per policy run; the row id is deterministic
   query hit without any relation keeps the v2 `watch` +
   `missing_ecosystem_relation`. Without a resolver the gate stays
   byte-for-byte v2.
+* **Assessment input identity (context)** - discovery-driven assessments hash
+  the whitelisted repository attributes together with the relation match
+  (`target`/`kind`/`field`, or none) and the discovery policy context hash,
+  so a relation or policy change yields a new auditable revision while
+  historical revisions are retained. 2C1-style calls without a resolver and
+  without a context keep the legacy attribute-only input hash. The stored
+  assessment row returned by the repository is what
+  `github_candidate_selection.winning_assessment_id` references; its decision
+  always equals the selection's stored `qualification_decision`.
+* **Probe status propagation** - a `partial` collection outcome keeps the
+  probe run `partial` with the stable `PROBE_PARTIAL` warning (never payload,
+  URL, query or exception text). The discovery run is `success` only when
+  every probe succeeded, `failed` when every probe is failed/blocked, and
+  `partial` otherwise.
 
 ## Data retention and the credentials-must-not-enter principle
 

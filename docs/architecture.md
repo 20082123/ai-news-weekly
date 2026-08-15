@@ -407,9 +407,22 @@ Key rules:
   claims each scope for its spec before the first network request. An
   existing cursor with a different `spec_hash` (or an unbound legacy scope)
   blocks the probe BEFORE any network access - a new query can never inherit
-  an old query's pagination cursor. Semantic changes bump the scope version.
+  an old query's pagination cursor. The binding also checks its owner: a
+  different `policy_id` or `probe_id` on the same spec blocks with
+  `SCOPE_BINDING_OWNER_MISMATCH`. Semantic changes bump the scope version.
+* **Deterministic priority.** Probes carry unique numeric priorities and run
+  in ascending order; the lowest priority wins a candidate seen by several
+  probes. `candidate_limit` is 1..100 and `research_budget` is 0..limit.
+* **Partial stays partial.** A `partial` collection keeps the probe run
+  `partial` with the stable `PROBE_PARTIAL` warning; the discovery run is
+  `success` only when every probe succeeded (any degradation -> `partial`,
+  all failed/blocked -> `failed`).
 * **Reuse, not re-invention.** Probes drive the existing
-  `collect_source_once` (2A/2B1) and `qualify_github` (2C1) unchanged.
+  `collect_source_once` (2A/2B1) and `qualify_github` (2C1); qualification
+  receives the policy context hash, and the assessment input identity covers
+  the relation match plus that context, so relation or policy changes yield
+  new auditable revisions (legacy 2C1 calls without a context keep the
+  original attribute-only input hash).
 * **Candidate-level dedup + budget.** The run deduplicates candidates across
   probes, ranks them deterministically (probe priority, then assessment
   recency, then candidate id - no LLM ranking), and splits the research

@@ -13,13 +13,23 @@ end over the existing 2A/2B1 collection and 2C1 qualification machinery::
 
 Safety rules:
 
-* a probe whose scope_key is bound to a different spec_hash, or that already
-  owns an unbound legacy cursor, is marked ``blocked`` and makes NO network
-  request - a new query can never inherit an old query's pagination cursor;
+* a probe whose scope_key is bound to a different spec_hash, or whose binding
+  owner (policy_id/probe_id) differs, or that already owns an unbound legacy
+  cursor, is marked ``blocked`` and makes NO network request - a new query can
+  never inherit an old query's pagination cursor, and one policy can never
+  ride another policy's scope;
 * network probes require an explicit ``allow_network`` (otherwise the run is
   refused before any database work, mirroring the collect CLI's exit code 4);
 * a single probe failure never aborts the run: the probe is marked ``failed``
-  and the remaining probes continue;
+  and the remaining probes continue; a ``partial`` collection stays
+  ``partial`` with the stable ``PROBE_PARTIAL`` warning - the run status is
+  ``success`` only when every probe succeeded, ``failed`` when every probe is
+  failed/blocked, and ``partial`` otherwise;
+* probes run in ascending numeric priority order (unique per policy); the
+  lowest priority wins a candidate seen by several probes;
+* assessments embed the discovery policy context hash (and any ecosystem
+  relation match) in their deterministic input identity, so relation or
+  policy changes produce new auditable revisions;
 * the budget only sets ``queue_state`` - the qualification decision is stored
   verbatim and never downgraded;
 * everything logged or returned is payload-free (stable codes and counts
@@ -68,6 +78,8 @@ from .relation import build_ecosystem_resolver
 _SELECTOR_LIMIT_CAP = 50
 
 WARN_PROBE_FAILED = "PROBE_FAILED"
+WARN_PROBE_PARTIAL = "PROBE_PARTIAL"
+WARN_SCOPE_BINDING_OWNER_MISMATCH = "SCOPE_BINDING_OWNER_MISMATCH"
 
 # Probe kinds that need a real network request in phase 2C2-B/C.
 _NETWORK_KINDS = ("search", "watchlist_target")
@@ -148,9 +160,13 @@ def run_github_discovery(
     policy = get_policy(policy_id)
     if not policy.probes:
         raise DiscoveryPolicyError("policy has no probes")
+    # Deterministic processing order: numeric priority ascending (probe_id as
+    # tie-breaker), never tuple order. The lowest numeric priority therefore
+    # wins a candidate seen by several probes.
+    probes = tuple(sorted(policy.probes, key=lambda p: (p.priority, p.probe_id)))
 
     ts = clock if clock is not None else now_utc
-    needs_network = any(probe.kind in _NETWORK_KINDS for probe in policy.probes)
+    needs_network = any(probe.kind in _NETWORK_KINDS for probe in probes)
     if needs_network and not allow_network:
         # Mirrors the collect CLI: refuse before any database work (exit 4).
         raise CollectionPolicyError("network not allowed: --allow-network is required")
@@ -182,7 +198,7 @@ def run_github_discovery(
         binding_repo = GitHubScopeBindingRepository(conn)
         cursor_repo = SourceCursorRepository(conn)
 
-        for probe in policy.probes:
+        for probe in probes:
             probe_run = GitHubDiscoveryProbeRun(
                 discovery_run_id=run.id,
                 probe_id=probe.probe_id,
@@ -207,6 +223,21 @@ def run_github_discovery(
                     object.__setattr__(probe_run, "status", "blocked")
                     object.__setattr__(probe_run, "finished_at", ts())
                     blocked[probe.probe_id] = WARN_SCOPE_SPEC_MISMATCH
+                elif (
+                    binding.policy_id != policy.id
+                    or binding.probe_id != probe.probe_id
+                ):
+                    # Same spec, different owner: another policy/probe claims
+                    # this scope. Blocked before any network access.
+                    object.__setattr__(
+                        probe_run,
+                        "warnings",
+                        (WARN_SCOPE_BINDING_OWNER_MISMATCH,),
+                    )
+                    object.__setattr__(probe_run, "warning_count", 1)
+                    object.__setattr__(probe_run, "status", "blocked")
+                    object.__setattr__(probe_run, "finished_at", ts())
+                    blocked[probe.probe_id] = WARN_SCOPE_BINDING_OWNER_MISMATCH
                 # matching binding: proceed (binding already claimed).
             else:
                 legacy_cursor = cursor_repo.get("github", probe.scope_key)
@@ -273,7 +304,7 @@ def run_github_discovery(
 
     failed: Dict[str, str] = {}
     collection_attempted: Dict[str, Tuple[str, int, str]] = {}
-    for probe in policy.probes:
+    for probe in probes:
         if probe.probe_id in blocked:
             continue
         try:
@@ -338,6 +369,15 @@ def run_github_discovery(
         if result.status == "failed":
             failed[probe.probe_id] = WARN_PROBE_FAILED
 
+        # Stable, payload-free degradation codes: never copy payload, URL,
+        # query or exception text into probe_run warnings.
+        if result.status == "failed":
+            outcome_warnings = (WARN_PROBE_FAILED,)
+        elif result.status == "partial":
+            outcome_warnings = (WARN_PROBE_PARTIAL,)
+        else:
+            outcome_warnings = ()
+
         collection_attempted[probe.probe_id] = (
             result.run_id,
             result.processed_item_count,
@@ -351,7 +391,7 @@ def run_github_discovery(
                 status=result.status,
                 collection_run_id=result.run_id,
                 item_count=result.processed_item_count,
-                warnings=("PROBE_FAILED",) if result.status == "failed" else (),
+                warnings=outcome_warnings,
                 finished_at=ts(),
             )
             conn.execute("COMMIT")
@@ -379,7 +419,7 @@ def run_github_discovery(
         relation_resolver = None
         if policy.lane == "ecosystem" and policy.ecosystem_targets:
             relation_resolver = build_ecosystem_resolver(policy.ecosystem_targets)
-        for probe in policy.probes:
+        for probe in probes:
             if probe.probe_id in blocked or probe.probe_id in failed:
                 continue
             scope_limit = min(policy.candidate_limit, _SELECTOR_LIMIT_CAP)
@@ -392,6 +432,7 @@ def run_github_discovery(
                     scope_limit,
                     clock=ts(),
                     relation_resolver=relation_resolver,
+                    discovery_context=policy.policy_hash,
                 )
             except QualifyError as exc:  # pragma: no cover - catalog is validated
                 raise sqlite_storage.StorageError(
@@ -458,11 +499,15 @@ def run_github_discovery(
             else:
                 over_budget += 1
 
-        # Run status: every probe blocked/failed -> failed; any probe
-        # blocked/failed -> partial (degraded but not silent); else success.
+        # Run status (acceptance rules):
+        #   success  - every probe succeeded;
+        #   failed   - every probe is failed/blocked;
+        #   partial  - anything else, including any single partial probe or
+        #              a mix of success/degradation. Degradation is always
+        #              visible, never silently upgraded to success.
         probe_statuses: List[str] = []
         warnings: List[str] = []
-        for probe in policy.probes:
+        for probe in probes:
             if probe.probe_id in blocked:
                 probe_statuses.append("blocked")
                 warnings.append(blocked[probe.probe_id])
@@ -470,17 +515,20 @@ def run_github_discovery(
                 probe_statuses.append("failed")
                 warnings.append(WARN_PROBE_FAILED)
             else:
-                probe_statuses.append(
+                status = (
                     collection_attempted[probe.probe_id][2]
                     if probe.probe_id in collection_attempted
                     else "failed"
                 )
-        if all(status in ("failed", "blocked") for status in probe_statuses):
-            run_status = "failed"
-        elif any(status in ("failed", "blocked") for status in probe_statuses):
-            run_status = "partial"
-        else:
+                probe_statuses.append(status)
+                if status == "partial":
+                    warnings.append(WARN_PROBE_PARTIAL)
+        if all(status == "success" for status in probe_statuses):
             run_status = "success"
+        elif all(status in ("failed", "blocked") for status in probe_statuses):
+            run_status = "failed"
+        else:
+            run_status = "partial"
 
         GitHubDiscoveryRunRepository(conn).update_status(
             run.id,
@@ -504,7 +552,7 @@ def run_github_discovery(
         lane=policy.lane,
         week_key=week_key,
         status=run_status,
-        probes_total=len(policy.probes),
+        probes_total=len(probes),
         probes_blocked=len(blocked),
         probes_failed=len(failed),
         processed=totals["processed"],

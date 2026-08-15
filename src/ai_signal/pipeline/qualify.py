@@ -588,8 +588,42 @@ def _gate(
 
 
 def _input_hash(attributes: Mapping[str, Any]) -> str:
+    """Legacy (2C1 candidate-gate-v2) input identity: attributes only."""
     return sha256_hex(
         json.dumps(attributes, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def _input_hash_with_context(
+    attributes: Mapping[str, Any],
+    relation: Optional[Any],
+    discovery_context: Optional[str],
+) -> str:
+    """Deterministic input identity for discovery-driven assessments.
+
+    Participates (in canonical JSON order):
+
+    * the safe whitelisted repository ``attributes``;
+    * whether a relation matched (``None`` when it did not);
+    * the matched relation ``target`` / ``kind`` / ``field`` when present;
+    * the discovery policy ``discovery_context`` (the policy hash or an
+      equivalent stable context).
+
+    No query, token, header, Cookie, raw untrusted URL or alias list is ever
+    part of the input; the context is already a hash, never its source.
+    """
+    payload: dict = {"attributes": attributes}
+    if relation is not None:
+        payload["relation"] = {
+            "target": relation.target,
+            "kind": relation.kind,
+            "field": relation.field,
+        }
+    else:
+        payload["relation"] = None
+    payload["discovery_context"] = discovery_context if discovery_context else ""
+    return sha256_hex(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     )
 
 
@@ -603,6 +637,7 @@ def qualify_github(
     clock: Optional[datetime] = None,
     safe_hosts: frozenset = _GITHUB_HOSTS,
     relation_resolver: Optional[Callable[[_ParsedRepo], Optional[Any]]] = None,
+    discovery_context: Optional[str] = None,
 ) -> QualifyResult:
     """Qualify the latest GitHub snapshot per repository for a discovery context.
 
@@ -612,14 +647,27 @@ def qualify_github(
     ``relation_resolver`` (phase 2C2-C) turns a parsed repository into an
     ecosystem relation match; when supplied, assessments use policy
     ``candidate-gate-v3``, otherwise the original ``candidate-gate-v2``.
+    ``discovery_context`` is the running policy's stable hash: when either it
+    or a resolver is supplied, the assessment input identity also covers the
+    relation match and the policy context, so a changed relation or policy
+    yields a new auditable revision. Without either, the legacy 2C1
+    ``candidate-gate-v2`` input hash and ids are byte-for-byte unchanged.
     """
     validate_scope_key(scope_key)
     if lane not in CANDIDATE_LANES:
         raise QualifyError("invalid lane")
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
         raise QualifyError("limit must be between 1 and 100")
+    if discovery_context is not None:
+        if (
+            not isinstance(discovery_context, str)
+            or len(discovery_context) != 64
+            or not all(ch in "0123456789abcdef" for ch in discovery_context)
+        ):
+            raise QualifyError("discovery_context must be a 64-character hex string")
 
     policy_version = POLICY_VERSION_V3 if relation_resolver is not None else POLICY_VERSION
+    use_context = relation_resolver is not None or discovery_context is not None
     ts = clock if clock is not None else now_utc()
     raw_rows = select_github_raw_signals(conn, week_key, scope_key, limit)
 
@@ -698,7 +746,13 @@ def qualify_github(
         assessment = CandidateAssessment(
             candidate_discovery_id=stored_discovery.id,
             policy_version=policy_version,
-            input_hash=_input_hash(parsed.attributes),
+            input_hash=(
+                _input_hash_with_context(
+                    parsed.attributes, relation, discovery_context
+                )
+                if use_context
+                else _input_hash(parsed.attributes)
+            ),
             decision=decision,
             trigger_kind=TRIGGER_KIND,
             trigger_summary=TRIGGER_SUMMARY,
@@ -709,7 +763,9 @@ def qualify_github(
         )
         if not assess_repo.exists(assessment.id):
             assessments_created += 1
-        assess_repo.insert_or_get(assessment)
+        # The stored row is canonical: it may be a previously persisted
+        # revision, and it is what downstream consumers must reference.
+        stored_assessment = assess_repo.insert_or_get(assessment)
 
         if decision == "research":
             research += 1
@@ -724,7 +780,7 @@ def qualify_github(
                 QualifiedCandidate(
                     candidate=stored_candidate,
                     discovery=stored_discovery,
-                    assessment=assessment,
+                    assessment=stored_assessment,
                     relation=relation,
                 )
             )
