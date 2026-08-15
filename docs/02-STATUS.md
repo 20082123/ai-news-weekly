@@ -145,9 +145,10 @@ GitHub Search Result
   0005 迁移四表、scope↔spec hash 防火墙、Mature/Emerging 编排（去重、预算、
   Selection）、Watchlist 直采（github-repos-v1）、Ecosystem metadata relation
   + Gate v3、CLI（discover github）与四条 Golden Cases；
-- **待第一用户输入**：Watchlist 3–5 个仓库、Ecosystem 1–2 个核心项目及强别名
-  （2026-08-15 未定，`watchlist-v1` / `ecosystem-v1` 目录条目当前为空）；
-  以及受控联网 smoke 的逐次授权。
+- **第一用户清单（草案）**：`watchlist-v1`（5 个仓库直采）与 `ecosystem-v1`
+  （核心项目 LangGraph + 强别名）已按草案填入 `policy.py` 的标记小节
+  （2026-08-16，未经第一用户确认）；替换条目只需改该小节；
+- **待第一用户授权**：受控联网 smoke 的逐次授权。
 
 Stage A 尚未完成：Golden Set 当前只有说明性种子，尚未完成 10～20 个真实样例的
 第一用户标注；`06-STAGE-B-SPEC.md` 也必须等 Golden Set 后才能起草和确认。

@@ -434,8 +434,10 @@ GitHub-specific policy（四条 GitHub Discovery Lane）
   同样只存 `full_name_sha256`）；Ecosystem 用 metadata relation
   （full_name / description / topics，词边界匹配，Gate `candidate-gate-v3`），
   关系证据保存 `relation_raw_signal_id`，不读取 README/Release 内容。
-- **待第一用户清单**：`watchlist-v1` 与 `ecosystem-v1` 的目录条目目前为空
-  （2026-08-15 未定），填好后即可运行；`mature-v1` / `emerging-v1` 可直接运行。
+- **第一用户清单（草案）**：`watchlist-v1`（5 个仓库直采）与 `ecosystem-v1`
+  （核心项目 LangGraph + 强别名）已按草案填入 `src/ai_signal/discovery/policy.py`
+  底部专门标记的小节（2026-08-16，未经第一用户确认）。替换条目只需改那一个小节；
+  正式确认前建议不跑真实 smoke。
 - 2C2 完成后停止连续扩展 GitHub，先实施 2C3 source-independent 契约。
 
 CLI（默认 DB-only；网络 probe 必须显式 `--allow-network`，否则退出码 `4`）：

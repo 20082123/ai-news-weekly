@@ -390,12 +390,12 @@ compatibility path - not deleted, not the recommended entry point.
 four policies matching the four GitHub Discovery Lanes:
 
 ```
-watchlist-v1  (watchlist_target probes; targets: first-user list,
-               NOT yet filled - 未定 as of 2026-08-15)
+watchlist-v1  (watchlist_target probes; DRAFT first-user list filled
+               2026-08-16, pending first-user confirmation/swap)
 mature-v1     3 search probes, stars>=100 de-noising, budget 50/5
 emerging-v1   3 search probes, no minimum stars, budget 100/8
-ecosystem-v1  (search probes + ecosystem_targets aliases: first-user list,
-               NOT yet filled - mechanism implemented in 2C2-C)
+ecosystem-v1  (search probes + ecosystem_targets aliases; DRAFT first-user
+               list filled 2026-08-16, pending confirmation/swap)
 ```
 
 Key rules:

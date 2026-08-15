@@ -220,12 +220,21 @@ class CatalogTest(unittest.TestCase):
         ]
         self.assertEqual(len(scope_keys), len(set(scope_keys)))
 
-    def test_watchlist_and_ecosystem_await_2c2c_targets(self):
-        # Targets are first-user-confirmed lists filled in 2C2-C; the catalog
-        # shape (lane, budgets) is already stable.
-        for policy_id in ("watchlist-v1", "ecosystem-v1"):
-            with self.subTest(policy_id=policy_id):
-                self.assertEqual(len(get_policy(policy_id).probes), 0)
+    def test_watchlist_and_ecosystem_draft_lists_present(self):
+        # DRAFT first-user lists (2026-08-16): the engineering shape is
+        # locked; only these catalog entries remain to be confirmed/swapped.
+        watchlist = get_policy("watchlist-v1")
+        self.assertEqual(len(watchlist.probes), 5)
+        for probe in watchlist.probes:
+            self.assertEqual(probe.kind, "watchlist_target")
+            self.assertIn("/", probe.spec["full_name"])
+        ecosystem = get_policy("ecosystem-v1")
+        self.assertGreaterEqual(len(ecosystem.probes), 1)
+        self.assertTrue(all(probe.kind == "search" for probe in ecosystem.probes))
+        self.assertEqual(len(ecosystem.ecosystem_targets), 1)
+        target = ecosystem.ecosystem_targets[0]
+        self.assertEqual(target.target, "langchain-ai/langgraph")
+        self.assertTrue(target.aliases)
 
     def test_unknown_policy_raises(self):
         with self.assertRaises(DiscoveryPolicyError):

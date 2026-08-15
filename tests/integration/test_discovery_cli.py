@@ -83,13 +83,27 @@ class DiscoverCliTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.db))
 
     def test_zero_probe_policy_rejected(self):
-        code, text = self._run(
-            ["discover", "github", "--policy", "watchlist-v1",
-             "--db-path", self.db, "--week-key", "2026-W33",
-             "--allow-network"]
+        from ai_signal.discovery.policy import GitHubDiscoveryPolicy
+
+        empty = GitHubDiscoveryPolicy(
+            id="empty-v1",
+            lane="emerging",
+            probes=(),
+            candidate_limit=10,
+            research_budget=2,
         )
+        with mock.patch(
+            "ai_signal.discovery.policy.POLICY_CATALOG", {"empty-v1": empty}
+        ):
+            code, text = self._run(
+                ["discover", "github", "--policy", "empty-v1",
+                 "--db-path", self.db, "--week-key", "2026-W33",
+                 "--allow-network"]
+            )
         self.assertEqual(code, EXIT_CONFIG_ERROR)
         self.assertIn("config error", text)
+        # Refused before any database work.
+        self.assertFalse(os.path.exists(self.db))
 
     def test_happy_path_mocked_runner(self):
         result = GitHubDiscoveryRunResult(

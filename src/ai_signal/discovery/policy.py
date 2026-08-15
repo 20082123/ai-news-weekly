@@ -27,9 +27,10 @@ Safety rules inherited from 2B1/2C1:
 * date qualifiers inside queries are FIXED constants; moving a time window is
   a semantic change and must bump the scope version.
 
-``watchlist-v1`` and ``ecosystem-v1`` are registered with empty probe tuples:
-their targets are human-confirmed lists provided by the first user, and are
-filled in during phase 2C2-C.
+``watchlist-v1`` and ``ecosystem-v1`` carry DRAFT first-user lists
+(2026-08-16, not yet confirmed): the engineering is complete and the entries
+are concentrated in one clearly-marked section at the bottom of this file so
+the first user can swap them without touching anything else.
 """
 
 from __future__ import annotations
@@ -354,26 +355,89 @@ _POLICY_EMERGING = GitHubDiscoveryPolicy(
     research_budget=8,
 )
 
-# Watchlist and ecosystem targets are first-user-confirmed lists (未定 as of
-# 2026-08-15); their probe/target tuples are filled by the first user during
-# phase 2C2-C. Budgets already match the agreed table so the catalog shape is
-# stable from 2C2-A onward. Until the lists arrive these two policies are
-# registered but deliberately NOT runnable ("policy has no probes").
+# --------------------------------------------------------------------------- #
+# First-user lists (DRAFT, 2026-08-16 - NOT yet confirmed by the first user).
+# The engineering is complete; only these catalog entries are provisional.
+# To change the watchlist or the ecosystem core project, edit ONLY this
+# section: probe scope_keys must stay unique and semantic changes must bump
+# the scope version (the binding firewall enforces it automatically).
+# --------------------------------------------------------------------------- #
+
+# Watchlist: human-confirmed core repositories, one direct-snapshot probe
+# each (no search, no stars/topic heuristics - Case D).
 _POLICY_WATCHLIST = GitHubDiscoveryPolicy(
     id="watchlist-v1",
     lane="watchlist",
-    probes=(),
+    probes=(
+        GitHubDiscoveryProbe(
+            probe_id="watchlist-v1-r1",
+            kind="watchlist_target",
+            scope_key="ghp-watchlist-v1-r1",
+            spec={"full_name": "paul-gauthier/aider"},
+            priority=0,
+        ),
+        GitHubDiscoveryProbe(
+            probe_id="watchlist-v1-r2",
+            kind="watchlist_target",
+            scope_key="ghp-watchlist-v1-r2",
+            spec={"full_name": "langchain-ai/langgraph"},
+            priority=1,
+        ),
+        GitHubDiscoveryProbe(
+            probe_id="watchlist-v1-r3",
+            kind="watchlist_target",
+            scope_key="ghp-watchlist-v1-r3",
+            spec={"full_name": "microsoft/autogen"},
+            priority=2,
+        ),
+        GitHubDiscoveryProbe(
+            probe_id="watchlist-v1-r4",
+            kind="watchlist_target",
+            scope_key="ghp-watchlist-v1-r4",
+            spec={"full_name": "openai/openai-agents-python"},
+            priority=3,
+        ),
+        GitHubDiscoveryProbe(
+            probe_id="watchlist-v1-r5",
+            kind="watchlist_target",
+            scope_key="ghp-watchlist-v1-r5",
+            spec={"full_name": "OleksandrChekhovskyi/hax"},
+            priority=4,
+        ),
+    ),
     candidate_limit=20,
     research_budget=5,
 )
 
+# Ecosystem: one monitored core project (LangGraph) with strong aliases; the
+# search probes recall wrappers/UIs/plugins/MCP servers and the relation
+# resolver (full_name/description/topics, word-boundary matching) decides
+# whether the metadata actually relates to the core.
 _POLICY_ECOSYSTEM = GitHubDiscoveryPolicy(
     id="ecosystem-v1",
     lane="ecosystem",
-    probes=(),
+    probes=(
+        _search_probe(
+            "ecosystem-v1-q1",
+            "ghp-eco-v1-q1",
+            "langgraph in:name,description pushed:>2026-07-01",
+            0,
+        ),
+        _search_probe(
+            "ecosystem-v1-q2",
+            "ghp-eco-v1-q2",
+            "topic:langgraph pushed:>2026-07-01",
+            1,
+        ),
+    ),
     candidate_limit=50,
     research_budget=5,
-    ecosystem_targets=(),
+    ecosystem_targets=(
+        EcosystemTargetSpec(
+            target="langchain-ai/langgraph",
+            aliases=("langgraph", "langgraphjs", "langgraph-mcp", "langchain"),
+        ),
+    ),
 )
 
 POLICY_CATALOG = {

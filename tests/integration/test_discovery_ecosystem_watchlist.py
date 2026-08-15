@@ -320,6 +320,90 @@ class WatchlistEcosystemTest(unittest.TestCase):
                     EcosystemTargetSpec(target="example-org/core"),),
             )
 
+    # ------------------------------------------------------------------ #
+    # Real catalog regression anchors (draft first-user lists, 2026-08-16).
+    # ------------------------------------------------------------------ #
+    def test_real_watchlist_catalog_end_to_end(self):
+        policy = policy_module.get_policy("watchlist-v1")
+        repos = {}
+        for index, probe in enumerate(policy.probes):
+            full_name = probe.spec["full_name"]
+            payload = _repo_item(80000 + index)
+            payload["full_name"] = full_name
+            payload["html_url"] = "https://github.com/" + full_name
+            repos[full_name] = payload
+        transport = _RoutingFakeTransport(repos_by_full_name=repos)
+        result = run_github_discovery(
+            self.db,
+            "2026-W33",
+            "watchlist-v1",
+            allow_network=True,
+            transport_factory=lambda: transport,
+            clock=lambda: _utc(CLOCK),
+        )
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.probes_total, 5)
+        self.assertEqual(result.research, 5)
+        self.assertEqual(result.selections_total, 5)
+        self.assertEqual(result.queued, 5)  # budget is 5
+        self.assertEqual(len(transport.calls), 5)
+        conn = S._open(self.db)
+        try:
+            probe_kinds = {
+                row["kind"]
+                for row in conn.execute(
+                    "SELECT kind FROM github_discovery_probe_run"
+                )
+            }
+            self.assertEqual(probe_kinds, {"watchlist_target"})
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM source_cursor").fetchone()[0], 0
+            )
+        finally:
+            conn.close()
+
+    def test_real_ecosystem_catalog_end_to_end(self):
+        policy = policy_module.get_policy("ecosystem-v1")
+        related = _repo_item(31, description=(
+            "A deployment and observability wrapper around langgraph for "
+            "agent teams, with enough substance for the gate."
+        ))
+        unrelated = _repo_item(32, description=(
+            "A completely unrelated task manager with plenty of substance "
+            "for the gate check to pass its description baseline."
+        ))
+        pages = {}
+        for probe in policy.probes:
+            items = [related, unrelated] if probe.priority == 0 else [related]
+            pages[probe.spec["query"]] = items
+        transport = _RoutingFakeTransport(search_pages=pages)
+        result = run_github_discovery(
+            self.db,
+            "2026-W33",
+            "ecosystem-v1",
+            allow_network=True,
+            transport_factory=lambda: transport,
+            clock=lambda: _utc(CLOCK),
+        )
+        self.assertEqual(result.status, "success")
+        # research counts per-scope assessments: the related repo qualifies in
+        # BOTH probes (2), the unrelated one stays watch in the first probe.
+        self.assertEqual(result.research, 2)
+        self.assertEqual(result.watch, 1)
+        # Candidate-level dedup happens at selection time: one final row.
+        self.assertEqual(result.selections_total, 1)
+        conn = S._open(self.db)
+        try:
+            row = conn.execute(
+                "SELECT ecosystem_target, relation_kind, relation_raw_signal_id "
+                "FROM github_candidate_selection"
+            ).fetchone()
+            self.assertEqual(row["ecosystem_target"], "langchain-ai/langgraph")
+            self.assertEqual(row["relation_kind"], "description_mention")
+            self.assertIsNotNone(row["relation_raw_signal_id"])
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
