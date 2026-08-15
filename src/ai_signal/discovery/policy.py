@@ -45,6 +45,7 @@ from ..domain.models import (
     sha256_hex,
     validate_scope_key,
 )
+from .relation import EcosystemTargetSpec
 
 # probe_id / policy_id share the scope-key naming discipline: lowercase,
 # stable alias, never a query, URL, path or credential.
@@ -206,9 +207,11 @@ class GitHubDiscoveryProbe:
 class GitHubDiscoveryPolicy:
     """An immutable, versioned GitHub discovery policy.
 
-    ``policy_hash`` covers the complete policy (id, lane, probes, budgets) and
-    is persisted on every run for audit. Probe ids and scope keys must be
-    unique inside one policy: one query, one scope, one cursor.
+    ``policy_hash`` covers the complete policy (id, lane, probes, budgets,
+    ecosystem targets) and is persisted on every run for audit. Probe ids and
+    scope keys must be unique inside one policy: one query, one scope, one
+    cursor. ``ecosystem_targets`` (phase 2C2-C) lists the first-user-confirmed
+    core projects for the ecosystem lane; it must be empty on other lanes.
     """
 
     id: str
@@ -216,6 +219,7 @@ class GitHubDiscoveryPolicy:
     probes: Tuple[GitHubDiscoveryProbe, ...]
     candidate_limit: int
     research_budget: int
+    ecosystem_targets: Tuple["EcosystemTargetSpec", ...] = ()
 
     def __post_init__(self) -> None:
         _require_label(self.id, "policy_id")
@@ -231,6 +235,16 @@ class GitHubDiscoveryPolicy:
         if len(set(scope_keys)) != len(scope_keys):
             raise DiscoveryPolicyError("scope_keys must be unique within a policy")
         object.__setattr__(self, "probes", probes)
+        targets = tuple(self.ecosystem_targets)
+        if not all(isinstance(target, EcosystemTargetSpec) for target in targets):
+            raise DiscoveryPolicyError(
+                "ecosystem_targets must contain EcosystemTargetSpec values"
+            )
+        if targets and self.lane != "ecosystem":
+            raise DiscoveryPolicyError("ecosystem_targets are only valid on the ecosystem lane")
+        if len({target.target for target in targets}) != len(targets):
+            raise DiscoveryPolicyError("ecosystem targets must be unique")
+        object.__setattr__(self, "ecosystem_targets", targets)
         _non_negative_int(self.candidate_limit, "candidate_limit")
         _non_negative_int(self.research_budget, "research_budget")
 
@@ -252,6 +266,10 @@ class GitHubDiscoveryPolicy:
             ],
             "candidate_limit": self.candidate_limit,
             "research_budget": self.research_budget,
+            "ecosystem_targets": [
+                {"target": target.target, "aliases": list(target.aliases)}
+                for target in self.ecosystem_targets
+            ],
         }
         return sha256_hex(_canonical(payload))
 
@@ -336,9 +354,11 @@ _POLICY_EMERGING = GitHubDiscoveryPolicy(
     research_budget=8,
 )
 
-# Watchlist and ecosystem targets are first-user-confirmed lists; their probe
-# tuples are filled during phase 2C2-C. Budgets already match the agreed
-# table so the catalog shape is stable from 2C2-A onward.
+# Watchlist and ecosystem targets are first-user-confirmed lists (未定 as of
+# 2026-08-15); their probe/target tuples are filled by the first user during
+# phase 2C2-C. Budgets already match the agreed table so the catalog shape is
+# stable from 2C2-A onward. Until the lists arrive these two policies are
+# registered but deliberately NOT runnable ("policy has no probes").
 _POLICY_WATCHLIST = GitHubDiscoveryPolicy(
     id="watchlist-v1",
     lane="watchlist",
@@ -353,6 +373,7 @@ _POLICY_ECOSYSTEM = GitHubDiscoveryPolicy(
     probes=(),
     candidate_limit=50,
     research_budget=5,
+    ecosystem_targets=(),
 )
 
 POLICY_CATALOG = {

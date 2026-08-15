@@ -1,11 +1,12 @@
-"""Real (read-only) GitHub Search API client for phase 2B1.
+"""Real (read-only) GitHub API clients.
 
-This module adds a controlled, read-only path to the public GitHub Search
-API on top of the existing :class:`~ai_signal.sources.github.GitHubSource` /
-:func:`~ai_signal.pipeline.collect.collect_source_once` machinery::
+Two opt-in, read-only paths live here (this is the only production module
+allowed to import ``urllib`` - see tests/regression/test_phase2a_boundaries):
 
-    GitHubSearchSpec -> GitHubRestClient -> GitHubSource -> SourceBatch
-                                                     -> collect_source_once
+* :class:`GitHubSearchSpec` / :class:`GitHubRestClient` (phase 2B1) - the
+  public repository Search API, page-based, one query per scope;
+* :class:`GitHubReposSpec` / :class:`GitHubReposClient` (phase 2C2-C) - a
+  direct single-repository snapshot for the watchlist lane.
 
 Hard rules enforced here:
 
@@ -15,12 +16,10 @@ Hard rules enforced here:
   credentials, no alternate port); redirects away from it are blocked;
 * no token / cookie / authorization header is ever sent - anonymous public
   data only;
-* the raw query string never reaches the cursor, the config snapshot, logs,
-  warnings or exception messages - only its SHA-256 does;
-* cursors are the stable form ``page:N`` (never a URL or query) and point at
-  the next page to request; when ``max_pages`` is reached (or results run out)
-  the cursor wraps back to ``page:1`` so a scope is re-scanned periodically;
-  SQLite dedup keeps ``raw_signal`` stable across re-scans;
+* the raw query / full_name never reaches the cursor, the config snapshot,
+  logs, warnings or exception messages - only their SHA-256 does;
+* search cursors are the stable form ``page:N`` (never a URL or query);
+  direct snapshots never paginate and refuse any cursor;
 * every failure is surfaced as a :class:`GitHubClientError` carrying a
   stable code and nothing sensitive.
 """
@@ -399,3 +398,156 @@ class GitHubRestClient:
         # exhausted) it wraps back to page 1 so the next run re-scans from the
         # top. SQLite dedup keeps raw_signal stable across re-scans.
         return "page:%d" % (page + 1) if has_more else "page:1"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2C2-C: read-only direct repository snapshot (watchlist lane)
+# --------------------------------------------------------------------------- #
+# Same network posture as the search client: https://api.github.com only,
+# no credentials, redirects blocked, final URL re-verified, and the raw
+# full_name is used only to build the URL - only its SHA-256 may be
+# persisted (config_snapshot["full_name_sha256"]).
+
+_REPOS_PATH_TEMPLATE = "https://api.github.com/repos/{owner}/{repo}"
+
+
+@dataclass(frozen=True)
+class GitHubReposSpec:
+    """An immutable, validated direct repository snapshot target.
+
+    ``full_name`` is ``owner/repo`` and is used ONLY to build the HTTPS
+    request; persisted state carries just :attr:`full_name_sha256`.
+    """
+
+    full_name: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.full_name, str):
+            raise ValueError("full_name must be a string")
+        if _has_control_characters(self.full_name):
+            raise ValueError("full_name contains control characters")
+        parts = self.full_name.strip().split("/")
+        if len(parts) != 2 or not all(parts):
+            raise ValueError("full_name must be owner/repo")
+        object.__setattr__(self, "full_name", "/".join(parts))
+
+    @property
+    def source_version(self) -> str:
+        return "github-repos-v1"
+
+    @property
+    def full_name_sha256(self) -> str:
+        canonical = json.dumps(
+            {"full_name": self.full_name},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class GitHubReposClient:
+    """A :class:`~ai_signal.sources.github.GitHubClient` over the repos API.
+
+    Fetches exactly one repository snapshot (no pagination, ``next_cursor`` is
+    always ``None``). The response object is handed to
+    :class:`~ai_signal.sources.github.GitHubSource`, whose field whitelist
+    decides what reaches storage - this client never stores anything itself.
+    """
+
+    def __init__(
+        self,
+        spec: GitHubReposSpec,
+        transport: HttpTransport,
+        *,
+        clock: Optional[Callable[[], datetime]] = None,
+        timeout_seconds: int = 10,
+        max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+    ) -> None:
+        if not isinstance(spec, GitHubReposSpec):
+            raise TypeError("spec must be a GitHubReposSpec")
+        self._spec = spec
+        self._transport = transport
+        self._clock: Callable[[], datetime] = clock if clock is not None else now_utc
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
+            raise ValueError("timeout_seconds must be an integer")
+        if not 1 <= timeout_seconds <= 30:
+            raise ValueError("timeout_seconds must be between 1 and 30")
+        self._timeout_seconds = timeout_seconds
+        if not isinstance(max_response_bytes, int) or max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
+        self._max_response_bytes = max_response_bytes
+
+    @property
+    def source_version(self) -> str:
+        return self._spec.source_version
+
+    @property
+    def spec(self) -> GitHubReposSpec:
+        return self._spec
+
+    def fetch(self, cursor: Optional[str]) -> GitHubPage:
+        if cursor is not None:
+            # Direct snapshots never paginate; an unexpected cursor means the
+            # caller mixed up a search scope with a watchlist scope.
+            raise GitHubClientError(ERR_INVALID_CURSOR)
+        owner, repo = self._spec.full_name.split("/", 1)
+        url = _REPOS_PATH_TEMPLATE.format(owner=owner, repo=repo)
+        try:
+            response = self._transport.get(
+                url, _DEFAULT_HEADERS, self._timeout_seconds, self._max_response_bytes
+            )
+        except GitHubClientError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - classify into a stable code
+            raise GitHubClientError(_classify_transport_error(exc)) from exc
+
+        self._verify_final_url(response.final_url)
+        if len(response.body) > self._max_response_bytes:
+            raise GitHubClientError(ERR_RESPONSE_TOO_LARGE)
+        if response.status != 200:
+            raise GitHubClientError(self._map_status(response.status, response.headers))
+
+        content_type = _header_get(response.headers, "Content-Type")
+        if "json" not in content_type.lower():
+            raise GitHubClientError(ERR_INVALID_CONTENT_TYPE)
+
+        try:
+            data = json.loads(response.body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise GitHubClientError(ERR_INVALID_JSON) from exc
+        if not isinstance(data, dict):
+            raise GitHubClientError(ERR_INVALID_RESPONSE)
+        return GitHubPage(
+            items=(data,),
+            next_cursor=None,
+            source_version=self._spec.source_version,
+            fetched_at=self._clock(),
+        )
+
+    @staticmethod
+    def _verify_final_url(final_url: str) -> None:
+        try:
+            parsed = urlparse(final_url)
+        except (TypeError, ValueError):
+            raise GitHubClientError(ERR_REDIRECT_BLOCKED)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != _HOST
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+        ):
+            raise GitHubClientError(ERR_REDIRECT_BLOCKED)
+
+    @staticmethod
+    def _map_status(status: int, headers: Any) -> str:
+        if status == 401:
+            return ERR_HTTP_AUTH
+        if status == 429:
+            return ERR_RATE_LIMITED
+        if status == 403:
+            if _header_get(headers, "X-RateLimit-Remaining").strip() == "0":
+                return ERR_RATE_LIMITED
+            return ERR_HTTP_AUTH
+        return ERR_HTTP_FAILURE

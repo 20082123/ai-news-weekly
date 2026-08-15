@@ -43,7 +43,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any, Callable, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from ..domain.models import (
@@ -69,6 +69,10 @@ class QualifyError(Exception):
 
 
 POLICY_VERSION = "candidate-gate-v2"
+# Phase 2C2-C: used when a relation resolver is supplied (ecosystem lane with
+# metadata relation evidence). Absent a resolver the behavior is byte-for-byte
+# the v2 gate.
+POLICY_VERSION_V3 = "candidate-gate-v3"
 TRIGGER_KIND = "repository_snapshot"
 TRIGGER_SUMMARY = "发现仓库快照，但尚未确认 Release、Launch 或重大变化。"
 
@@ -124,6 +128,7 @@ R_TOO_OLD = "older_than_max_age"
 R_STARS_MET = "mature_stars_threshold_met"
 R_STARS_LOW = "mature_stars_below_threshold"
 R_MISSING_ECO = "missing_ecosystem_relation"
+R_ECO_RELATED = "ecosystem_relation_match"
 
 R_HOME_PRESENT = "homepage_present_unverified"
 R_HOME_UNSAFE = "homepage_ignored_unsafe"
@@ -163,6 +168,9 @@ class QualifiedCandidate:
     candidate: Candidate
     discovery: CandidateDiscovery
     assessment: CandidateAssessment
+    # Phase 2C2-C: ecosystem relation match (target/kind/field), None for
+    # other lanes or when no resolver was supplied.
+    relation: Optional[Any] = None
 
 
 @dataclass(frozen=True)
@@ -495,11 +503,18 @@ def _is_agent_relevant(parsed: _ParsedRepo) -> bool:
     return any(keyword in haystack for keyword in AGENT_RELEVANCE_KEYWORDS)
 
 
-def _gate(parsed: _ParsedRepo, lane: str, clock: datetime) -> Tuple[str, Tuple[str, ...]]:
+def _gate(
+    parsed: _ParsedRepo, lane: str, clock: datetime, relation: Optional[Any] = None
+) -> Tuple[str, Tuple[str, ...]]:
     """Apply the common filters, then the lane-aware qualification gate.
 
     Returns ``(decision, reason_codes)``. No composite float score exists by
     design: the decision is fully explained by the reason codes.
+
+    ``relation`` (phase 2C2-C) is a metadata relation match produced by an
+    ecosystem resolver (duck-typed: ``target`` / ``kind`` / ``field``). It is
+    only consulted for the ecosystem lane; every other lane ignores it, so
+    the v2 gate results are unchanged when no resolver is supplied.
     """
     # --- common safety / junk filters -> REJECT ---------------------------
     reject_codes: List[str] = []
@@ -559,8 +574,15 @@ def _gate(parsed: _ParsedRepo, lane: str, clock: datetime) -> Tuple[str, Tuple[s
             return "research", tuple(dict.fromkeys(codes))
         return "watch", tuple(dict.fromkeys(codes))
 
-    # ecosystem: 2C2 Discovery Policy will provide monitored core projects
-    # and relation evidence; metadata alone can never establish a relation.
+    # ecosystem: metadata-only evidence can never establish a relation by
+    # itself. With a resolver-supplied relation match (full_name/description/
+    # topics) the candidate still needs substantive description + recent push
+    # to reach RESEARCH (policy candidate-gate-v3).
+    if relation is not None:
+        if substantive and push_active:
+            codes.append(R_ECO_RELATED)
+            return "research", tuple(dict.fromkeys(codes))
+        return "watch", tuple(dict.fromkeys(codes))
     codes.append(R_MISSING_ECO)
     return "watch", tuple(dict.fromkeys(codes))
 
@@ -580,11 +602,16 @@ def qualify_github(
     *,
     clock: Optional[datetime] = None,
     safe_hosts: frozenset = _GITHUB_HOSTS,
+    relation_resolver: Optional[Callable[[_ParsedRepo], Optional[Any]]] = None,
 ) -> QualifyResult:
     """Qualify the latest GitHub snapshot per repository for a discovery context.
 
     ``conn`` is an open connection; the caller owns the transaction. Raises
     :class:`StorageError` on database failure (caller rolls back).
+
+    ``relation_resolver`` (phase 2C2-C) turns a parsed repository into an
+    ecosystem relation match; when supplied, assessments use policy
+    ``candidate-gate-v3``, otherwise the original ``candidate-gate-v2``.
     """
     validate_scope_key(scope_key)
     if lane not in CANDIDATE_LANES:
@@ -592,6 +619,7 @@ def qualify_github(
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
         raise QualifyError("limit must be between 1 and 100")
 
+    policy_version = POLICY_VERSION_V3 if relation_resolver is not None else POLICY_VERSION
     ts = clock if clock is not None else now_utc()
     raw_rows = select_github_raw_signals(conn, week_key, scope_key, limit)
 
@@ -657,7 +685,8 @@ def qualify_github(
             discoveries_created += 1
 
         # --- lane-aware deterministic assessment --------------------------
-        decision, reason_codes = _gate(parsed, lane, ts)
+        relation = relation_resolver(parsed) if relation_resolver is not None else None
+        decision, reason_codes = _gate(parsed, lane, ts, relation)
         extra_codes: List[str] = []
         if parsed.homepage_present and parsed.homepage_safe:
             extra_codes.append(R_HOME_PRESENT)
@@ -668,7 +697,7 @@ def qualify_github(
 
         assessment = CandidateAssessment(
             candidate_discovery_id=stored_discovery.id,
-            policy_version=POLICY_VERSION,
+            policy_version=policy_version,
             input_hash=_input_hash(parsed.attributes),
             decision=decision,
             trigger_kind=TRIGGER_KIND,
@@ -696,6 +725,7 @@ def qualify_github(
                     candidate=stored_candidate,
                     discovery=stored_discovery,
                     assessment=assessment,
+                    relation=relation,
                 )
             )
 

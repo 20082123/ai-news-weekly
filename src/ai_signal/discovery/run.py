@@ -44,7 +44,13 @@ from ..domain.models import (
 )
 from ..pipeline.collect import CollectionPolicyError, collect_source_once
 from ..pipeline.qualify import QualifyError, qualify_github
-from ..sources.github_rest import GitHubRestClient, GitHubSearchSpec, UrllibTransport
+from ..sources.github_rest import (
+    GitHubReposClient,
+    GitHubReposSpec,
+    GitHubRestClient,
+    GitHubSearchSpec,
+    UrllibTransport,
+)
 from ..storage import sqlite as sqlite_storage
 from ..storage.discovery_repositories import (
     GitHubCandidateSelectionRepository,
@@ -54,6 +60,7 @@ from ..storage.discovery_repositories import (
 )
 from ..storage.source_repositories import SourceCursorRepository
 from .policy import DiscoveryPolicyError, get_policy
+from .relation import build_ecosystem_resolver
 
 # The 2C1 raw-signal selector caps a scope at 50 repositories; a policy
 # candidate_limit above that is therefore applied per scope as this cap
@@ -109,6 +116,14 @@ def _build_search_spec(probe) -> GitHubSearchSpec:
         )
     except (TypeError, ValueError) as exc:
         raise DiscoveryPolicyError("probe spec rejected by search adapter") from exc
+
+
+def _build_repos_spec(probe) -> GitHubReposSpec:
+    """Map a validated watchlist probe spec onto the 2C2-C repos spec."""
+    try:
+        return GitHubReposSpec(full_name=probe.spec["full_name"])
+    except (TypeError, ValueError) as exc:
+        raise DiscoveryPolicyError("probe spec rejected by repos adapter") from exc
 
 
 def run_github_discovery(
@@ -283,7 +298,26 @@ def run_github_discovery(
                     "per_page": search_spec.per_page,
                     "max_pages": search_spec.max_pages,
                 }
-            else:  # pragma: no cover - watchlist/ecosystem land in 2C2-C
+            elif probe.kind == "watchlist_target":
+                # Direct single-repository snapshot (phase 2C2-C): no
+                # pagination, no search - metadata only, never README/Release.
+                repos_spec = _build_repos_spec(probe)
+                transport = (
+                    transport_factory()
+                    if transport_factory is not None
+                    else UrllibTransport()
+                )
+                client = GitHubReposClient(
+                    repos_spec, transport, timeout_seconds=timeout_seconds
+                )
+                config_snapshot = {
+                    "run_mode": "shadow",
+                    "source": "github",
+                    "scope_key": probe.scope_key,
+                    "adapter_kind": "github-repos-v1",
+                    "full_name_sha256": repos_spec.full_name_sha256,
+                }
+            else:  # pragma: no cover - no other probe kinds exist
                 raise DiscoveryPolicyError("probe kind not implemented yet")
 
             result = collect_source_once(
@@ -340,6 +374,11 @@ def run_github_discovery(
     conn = sqlite_storage._open(db_path)
     try:
         conn.execute("BEGIN")
+        # Ecosystem lane: relation evidence comes from the policy's confirmed
+        # core-project targets (metadata only; README confirmation is 2D).
+        relation_resolver = None
+        if policy.lane == "ecosystem" and policy.ecosystem_targets:
+            relation_resolver = build_ecosystem_resolver(policy.ecosystem_targets)
         for probe in policy.probes:
             if probe.probe_id in blocked or probe.probe_id in failed:
                 continue
@@ -352,6 +391,7 @@ def run_github_discovery(
                     policy.lane,
                     scope_limit,
                     clock=ts(),
+                    relation_resolver=relation_resolver,
                 )
             except QualifyError as exc:  # pragma: no cover - catalog is validated
                 raise sqlite_storage.StorageError(
@@ -386,6 +426,15 @@ def run_github_discovery(
                 beyond_limit += 1
                 continue
             within_budget = rank < policy.research_budget
+            relation_target = None
+            relation_kind = None
+            relation_field = None
+            if qc.relation is not None:
+                # Ecosystem relation evidence: keep the target/kind/field and
+                # the raw_signal_id of the snapshot that evidenced the match.
+                relation_target = qc.relation.target
+                relation_kind = qc.relation.kind
+                relation_field = qc.relation.field
             selection = GitHubCandidateSelection(
                 discovery_run_id=run.id,
                 candidate_id=qc.candidate.id,
@@ -396,6 +445,12 @@ def run_github_discovery(
                 queue_state="queued" if within_budget else "over_budget",
                 budget_reason=None if within_budget else BUDGET_REASON_EXCEEDED,
                 created_at=ts(),
+                ecosystem_target=relation_target,
+                relation_kind=relation_kind,
+                relation_field=relation_field,
+                relation_raw_signal_id=(
+                    qc.discovery.raw_signal_id if relation_target is not None else None
+                ),
             )
             selection_repo.insert_or_get(selection)
             if within_budget:

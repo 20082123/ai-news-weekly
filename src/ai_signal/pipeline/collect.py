@@ -59,6 +59,7 @@ class CollectionPolicyError(Exception):
 
 _ADAPTER_KIND_FIXTURE = "fixture"
 _ADAPTER_KIND_REST = "github-rest-v1"
+_ADAPTER_KIND_REPOS = "github-repos-v1"
 
 _FIXTURE_CONFIG_KEYS = frozenset(
     {"run_mode", "source", "scope_key", "adapter_kind", "fixture", "fixture_sha256"}
@@ -75,6 +76,11 @@ _REST_CONFIG_KEYS = frozenset(
         "per_page",
         "max_pages",
     }
+)
+# Phase 2C2-C: direct single-repository snapshot (watchlist lane). The raw
+# full_name never enters the snapshot - only its SHA-256 does.
+_REPOS_CONFIG_KEYS = frozenset(
+    {"run_mode", "source", "scope_key", "adapter_kind", "full_name_sha256"}
 )
 
 
@@ -107,6 +113,10 @@ def _validate_rest_fields(config_snapshot: Mapping[str, Any]) -> None:
         raise CollectionPolicyError("max_pages must be between 1 and 3")
 
 
+def _validate_repos_fields(config_snapshot: Mapping[str, Any]) -> None:
+    _require_hex64("full_name_sha256", config_snapshot.get("full_name_sha256"))
+
+
 @dataclass(frozen=True)
 class CollectionResult:
     """Safe, payload-free summary of one collection run."""
@@ -129,12 +139,14 @@ def _validate_collection_config(
         allowed = _FIXTURE_CONFIG_KEYS
     elif adapter_kind == _ADAPTER_KIND_REST:
         allowed = _REST_CONFIG_KEYS
+    elif adapter_kind == _ADAPTER_KIND_REPOS:
+        allowed = _REPOS_CONFIG_KEYS
     else:
         raise CollectionPolicyError("unsupported adapter_kind")
     extra = set(config_snapshot.keys()) - allowed
     if extra:
         raise CollectionPolicyError("config_snapshot contains disallowed keys")
-    # Shared invariants for both adapters.
+    # Shared invariants for all adapters.
     if config_snapshot.get("run_mode") != "shadow":
         raise CollectionPolicyError("only shadow run_mode is permitted")
     if config_snapshot.get("source") != source:
@@ -143,8 +155,10 @@ def _validate_collection_config(
         raise CollectionPolicyError("config_snapshot scope_key mismatch")
     if adapter_kind == _ADAPTER_KIND_FIXTURE:
         _validate_fixture_fields(config_snapshot)
-    else:
+    elif adapter_kind == _ADAPTER_KIND_REST:
         _validate_rest_fields(config_snapshot)
+    else:
+        _validate_repos_fields(config_snapshot)
 
 
 def _canonical_payload_hash(payload: Mapping[str, Any]) -> str:

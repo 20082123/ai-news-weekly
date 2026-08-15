@@ -20,9 +20,12 @@ from .policy import (
     get_policy,
     list_policies,
 )
+from .relation import EcosystemRelationMatch, EcosystemTargetSpec
 from .run import GitHubDiscoveryRunResult, run_github_discovery
 
 __all__ = [
+    "EcosystemRelationMatch",
+    "EcosystemTargetSpec",
     "GitHubDiscoveryPolicy",
     "GitHubDiscoveryProbe",
     "GitHubDiscoveryRunResult",
