@@ -47,6 +47,11 @@ last_updated: 2026-08-15
 | 2C1 Candidate Qualification | `verified`，423 项总测试通过 | 尚未对真实 Vault 数据运行 | 尚未改善发现或素材质量 | 可保留的 GitHub 候选层 |
 | 2C2 GitHub Discovery Policy | 工程 `verified`（离线 495 项测试） | 无 | 待第一用户清单与受控联网 smoke | GitHub-specific Discovery Policy Adapter（DEC-013） |
 | 2C3 Source-independent Event Candidate | `in_progress`（2C3-A：五类 Taxonomy + EventCandidate 契约） | 无 | 不确认事件、不复用 2B event 表 | 薄的来源无关契约（DEC-014） |
+| 2D1/2D2 研究核心 + GitHub Research Adapter | 代码完成，待离线验证与提交 | 无 | 不生成结论性散文，只引用第一方事实 | ResearchDossier + README/Release 事实抽取 |
+| 2D3 Official/Web 证据 | 引用类型已预留；官方页面抓取待实现 | 无 | 需独立 transport 模块 | official_announcement_candidate 指针 |
+| 2E Editorial Decision | 代码完成，待离线验证与提交 | 无 | reject 不由 editorial-v1 产生 | editorial-v1 确定性门控 |
+| 2F 内容 Brief / 测试计划 / 平台复用 | 代码完成，待离线验证与提交 | 无 | 体验型结论仅限实测后 | Markdown 选题卡输出 |
+| Phase 3 周运行 | 代码完成，待离线验证与提交 | 无 | 不做 OS 级调度（文档说明） | weekly run 端到端命令 |
 
 关键解释：
 

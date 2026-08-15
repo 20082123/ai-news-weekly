@@ -148,11 +148,16 @@ GitHub Search Result
   四个策略真实采集（13 请求）全 success，产出研究队列 20 条 queued；
 - **Golden Set 封版（有好有坏）**：`docs/golden-set/` 4 份档案 + 20 行候选表；
   GS-12 已记第一用户初判（不吸引 → reject）；
-- **2C3-A 完成、2C3-B 完成**：五类 Signal Taxonomy + `event_candidate`/
-  `event_candidate_source_ref`（0006）+ CLI + GitHub 队列自动提升
-  （`event-candidate promote-github`）；Golden 档案与 2026-W33 队列（20 条
-  queued → 19 草案 + 1 跳过）已写入开发库；
-- **待第一用户**：Watchlist/Ecosystem 清单确认；后续受控 smoke 授权。
+- **2C3-A/B 完成**：五类 Signal Taxonomy + `event_candidate`/
+  `event_candidate_source_ref`（0006）+ CLI + GitHub 队列自动提升；
+  Golden 档案与 2026-W33 队列已写入开发库；
+- **2D/2E/2F + Phase 3 代码完成**（0007 迁移：`research_dossier`/
+  `research_fact`/`editorial_decision`；README/Release 只读研究客户端；
+  editorial-v1 确定性门控；内容 Brief Markdown 输出；`weekly run`
+  端到端编排与 CLI）——离线验证、git 提交与真实端到端运行待环境恢复后
+  执行；
+- **待第一用户**：Watchlist/Ecosystem 清单确认；后续受控 smoke 授权；
+  Reddit/X（Phase 4）需登录态配置。
 
 Stage A 尚未完成：Golden Set 当前只有说明性种子，尚未完成 10～20 个真实样例的
 第一用户标注；`06-STAGE-B-SPEC.md` 也必须等 Golden Set 后才能起草和确认。

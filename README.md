@@ -510,3 +510,42 @@ python -m ai_signal event-candidate promote-github `
 人工研究时只需把草案的 signal_type / change_summary / 受众 / 影响 / 优先级
 改成真实判断（旧草案行保留为审计历史）。`official_announcement_candidate`
 引用类型已预留（2D3 接入官方公告 Adapter）。
+
+### 第二阶段 2D/2E/2F + Phase 3：研究、编辑判定与内容 Brief
+
+从 EventCandidate 到可写稿件的剩余链路已全部实现（确定性、无 LLM）：
+
+```text
+EventCandidate
+→ research build（2D：读 README + Release，事实/时间线/限制/禁说清单，
+                  体验型宣称自动标记 needs_testing）
+→ editorial decide（2E：ready_to_write / needs_testing / watch，
+                   reason codes 可审计）
+→ content brief（2F：选题卡 + 事实与来源 + 测试计划 + B站母内容/平台复用
+                  角度，Markdown 文件，全部内容引自已存事实）
+→ weekly run（Phase 3：发现 → 提升 → 研究 → 判定 → Brief 一条命令跑完）
+```
+
+```powershell
+python -m ai_signal research build --db-path ./.ai-signal/ai_signal.db `
+  --event-id <event_candidate_id> --allow-network
+
+python -m ai_signal research show --db-path ./.ai-signal/ai_signal.db --event-id <id>
+
+python -m ai_signal research add-evidence --db-path ./.ai-signal/ai_signal.db `
+  --event-id <id> --url https://官方公告页 --allow-network
+
+python -m ai_signal editorial decide --db-path ./.ai-signal/ai_signal.db --event-id <id>
+
+python -m ai_signal content brief --db-path ./.ai-signal/ai_signal.db `
+  --event-id <id> --week-key 2026-W33 `
+  --output-root ./.ai-signal --allow-output-write
+
+python -m ai_signal weekly run --db-path ./.ai-signal/ai_signal.db `
+  --week-key 2026-W33 --allow-network `
+  --output-root ./.ai-signal --allow-output-write
+```
+
+Brief 文件写入 `<output-root>/Content/<week_key> - <subject>.md`（安全文件名、
+原子写入、不逃逸输出根目录）。体验型结论（更快/更好/更稳）只在
+`needs_testing` 且本人测试完成后才允许写进任何输出。

@@ -446,6 +446,41 @@ safe, pre-validated human-readable label; never a URL or payload).
 `UNIQUE (event_candidate_id, source_kind, ref_id)`; the row id is
 deterministic over the same triple.
 
+## Phase 2D/2E: research dossier, facts and editorial decision (migration 0007)
+
+Migration `0007_research_and_editorial.sql` adds three tables (purely
+additive; 0001-0006 are immutable). Dossiers key off `event_candidate` only -
+the legacy 2B `event` table is never reused.
+
+### `research_dossier`
+
+One revision per `(event_candidate_id, bundle_hash)`; the bundle hash covers
+the canonical fact set, so new evidence yields a new auditable revision.
+Fields: `status` (`draft | complete | partial | failed`),
+`summary_judgment` (explicit machine draft), `timeline` (JSON array of
+quoted events), `target_audience`, `job_to_be_done`, `limits_unknowns`
+(JSON), `forbidden_claims` (JSON, 禁说清单), `needs_testing` (0/1, derived
+from experience-claim markers in release/README text) and `test_plan`.
+
+### `research_fact`
+
+Auditable facts bound to a dossier: `kind`
+(`fact | official_claim | unknown | contradiction`), quoted `text`,
+`source_kind` (`github_release | github_readme | github_metadata |
+official_page | manual`) and `source_url` (first-party evidence URL: https
+only, no credentials, no control characters). External text (README/release
+bodies) is control-character-stripped, length-capped and injection-marker
+sanitized before storage.
+
+### `editorial_decision`
+
+Deterministic per `(dossier_id, policy_version, input_hash)` where the input
+hash covers the dossier id, its fact identities and `needs_testing`.
+`decision` is `ready_to_write | needs_testing | watch | reject` (reject is
+not produced by `editorial-v1`); `reason_codes` are stable codes:
+`first_party_change_evidence`, `experience_claim_detected`, `thin_evidence`,
+`no_first_party_change_evidence`.
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes
