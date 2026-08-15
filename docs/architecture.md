@@ -390,10 +390,12 @@ compatibility path - not deleted, not the recommended entry point.
 four policies matching the four GitHub Discovery Lanes:
 
 ```
-watchlist-v1  (targets: first-user list, filled in 2C2-C)
+watchlist-v1  (watchlist_target probes; targets: first-user list,
+               NOT yet filled - 未定 as of 2026-08-15)
 mature-v1     3 search probes, stars>=100 de-noising, budget 50/5
 emerging-v1   3 search probes, no minimum stars, budget 100/8
-ecosystem-v1  (targets + aliases: first-user list, filled in 2C2-C)
+ecosystem-v1  (search probes + ecosystem_targets aliases: first-user list,
+               NOT yet filled - mechanism implemented in 2C2-C)
 ```
 
 Key rules:
@@ -416,9 +418,15 @@ Key rules:
 * **Output is a GitHub Research Queue only** - `github_candidate_selection`
   rows, DB-only. No Events, no A-F packs, no Markdown reports, no global
   Signal taxonomy. Watchlist observes repository metadata only (no README /
-  Release content); Ecosystem relations are metadata-only
-  (`full_name | description | topics` matches against first-user aliases),
+  Release content) via a direct `GET /repos/{owner}/{repo}` snapshot
+  (`github-repos-v1` adapter, no pagination, full_name never persisted);
+  Ecosystem relations are metadata-only (`full_name | description | topics`
+  matches against first-user aliases, word-boundary matching, Gate
+  `candidate-gate-v3` with the relation evidenced by its `raw_signal_id`);
   README confirmation is deferred to 2D.
+* **CLI (2C2-D)** - `ai-signal discover github --policy <id>` runs a policy
+  (network probes require `--allow-network`), `--list-policies` prints safe
+  catalog metadata and `--status` prints recent runs with safe counts.
 
 ### Historical boundary of the original 2A delivery
 

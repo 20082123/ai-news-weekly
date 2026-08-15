@@ -45,20 +45,20 @@ last_updated: 2026-08-15
 | 2B2 仓库直接素材化 | `verified` | 已真实生成素材 | `failed`：Repository 被错误等同于 Event | `superseded` 原型 |
 | 2B3 中文 A–F 输出 | `verified` | 已生成 10 份中文文件 | `failed`：更可读，但素材质量低 | `superseded` 展示原型 |
 | 2C1 Candidate Qualification | `verified`，423 项总测试通过 | 尚未对真实 Vault 数据运行 | 尚未改善发现或素材质量 | 可保留的 GitHub 候选层 |
-| 2C2 GitHub Discovery Policy | `in_progress`（2C2-A 进行中） | 无 | 无 | GitHub-specific Discovery Policy Adapter（DEC-013） |
+| 2C2 GitHub Discovery Policy | 工程 `verified`（离线 495 项测试） | 无 | 待第一用户清单与受控联网 smoke | GitHub-specific Discovery Policy Adapter（DEC-013） |
 
 关键解释：
 
 - 2B2/2B3 不是白做。它们验证了证据绑定、Markdown 输出和反馈基础，但证明了“仓库不能直接成为素材”。
 - 2C1 不是内容系统。它只回答“这个 GitHub 仓库值不值得继续花成本研究”。
-- 当前 423 项测试是工程证据，不是内容质量证据。
+- 当前 495 项测试是工程证据，不是内容质量证据。
 
 ### 2.1 修正后的全局路线图（技术主线，2026-08-15 定版）
 
 ```text
 2C1 GitHub Repository Candidate Qualification     ✅ 完成
 ↓
-2C2 GitHub Discovery Policy Adapter               in_progress（GitHub-specific，只输出 GitHub Research Queue）
+2C2 GitHub Discovery Policy Adapter               ✅ 工程完成（离线 495 项测试；真实运行待第一用户清单与受控 smoke）
 ↓
 2C3 Source-independent Discovery Gate
      + Signal Taxonomy

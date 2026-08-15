@@ -9,6 +9,10 @@ Implemented commands:
 * ``ai-signal collect github ...``        offline fixture-backed collection
 * ``ai-signal collect github-live ...``   read-only public GitHub Search API
                                            (requires ``--allow-network``)
+* ``ai-signal discover github ...``       run a GitHub discovery policy (2C2),
+                                           list policy catalog, show run status
+                                           (network probes require
+                                           ``--allow-network``)
 
 Exit codes:
 
@@ -178,6 +182,39 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required (with --emit-candidate-markdown) to write debug cards",
     )
+    # discover ---------------------------------------------------------------
+    p_disc = sub.add_parser(
+        "discover", help="GitHub discovery policy runner (phase 2C2)"
+    )
+    disc_sub = p_disc.add_subparsers(dest="discover_command", required=True)
+    p_disc_gh = disc_sub.add_parser(
+        "github", help="run a GitHub discovery policy or inspect catalog/status"
+    )
+    p_disc_gh.add_argument("--db-path", dest="db_path")
+    p_disc_gh.add_argument("--week-key", dest="week_key")
+    p_disc_gh.add_argument(
+        "--policy", dest="policy_id", help="policy id from the catalog"
+    )
+    p_disc_gh.add_argument("--timeout", type=int, default=10)
+    p_disc_gh.add_argument(
+        "--allow-network",
+        dest="allow_network",
+        action="store_true",
+        help="required gate to enable real network requests",
+    )
+    p_disc_gh.add_argument(
+        "--list-policies",
+        dest="list_policies",
+        action="store_true",
+        help="print safe catalog summaries (never queries or hashes)",
+    )
+    p_disc_gh.add_argument(
+        "--status",
+        dest="show_status",
+        action="store_true",
+        help="print recent discovery runs with safe counts",
+    )
+    p_disc_gh.add_argument("--limit", type=int, default=10)
     return parser
 
 
@@ -685,6 +722,114 @@ def cmd_candidate_qualify_github(args, out) -> int:
     return EXIT_OK
 
 
+def cmd_discover_github(args, out) -> int:
+    from .discovery import list_policies, run_github_discovery
+    from .discovery.policy import DiscoveryPolicyError
+    from .pipeline.collect import CollectionPolicyError
+    from .storage import sqlite as sqlite_storage
+
+    if args.list_policies:
+        # Safe catalog metadata only: never a query, scope, spec or hash.
+        for entry in list_policies():
+            out.write("policy: %s\n" % entry["id"])
+            out.write("  lane: %s\n" % entry["lane"])
+            out.write("  probes: %d\n" % entry["probe_count"])
+            out.write("  candidate_limit: %d\n" % entry["candidate_limit"])
+            out.write("  research_budget: %d\n" % entry["research_budget"])
+        return EXIT_OK
+
+    if args.show_status:
+        if not args.db_path:
+            out.write("config error: --db-path is required\n")
+            return EXIT_CONFIG_ERROR
+        if not isinstance(args.limit, int) or isinstance(args.limit, bool) or not 1 <= args.limit <= 50:
+            out.write("invalid limit\n")
+            return EXIT_CONFIG_ERROR
+        from pathlib import Path
+
+        if not Path(args.db_path).exists():
+            out.write("database does not exist\n")
+            return EXIT_DB_ERROR
+        try:
+            with sqlite_storage.connect(args.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT r.id, r.policy_id, r.week_key, r.status, r.started_at, "
+                    " (SELECT COUNT(*) FROM github_candidate_selection s "
+                    "  WHERE s.discovery_run_id = r.id) AS selected "
+                    "FROM github_discovery_run r ORDER BY r.started_at DESC LIMIT ?",
+                    (args.limit,),
+                ).fetchall()
+        except sqlite_storage.StorageError:
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        except Exception:  # noqa: BLE001 - missing tables etc.
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        for row in rows:
+            out.write(
+                "run: %s policy=%s week=%s status=%s selected=%d\n"
+                % (row["id"], row["policy_id"], row["week_key"],
+                   row["status"], int(row["selected"]))
+            )
+        return EXIT_OK
+
+    # Run mode: everything is validated before any database or network work.
+    if not args.db_path:
+        out.write("config error: --db-path is required\n")
+        return EXIT_CONFIG_ERROR
+    if not args.week_key:
+        out.write("config error: --week-key is required\n")
+        return EXIT_CONFIG_ERROR
+    if not args.policy_id:
+        out.write("config error: --policy is required\n")
+        return EXIT_CONFIG_ERROR
+    if not _WEEK_KEY_RE.match(args.week_key):
+        out.write("invalid week key: expected YYYY-Www\n")
+        return EXIT_CONFIG_ERROR
+    if isinstance(args.timeout, bool) or not isinstance(args.timeout, int) or not 1 <= args.timeout <= 30:
+        out.write("invalid timeout\n")
+        return EXIT_CONFIG_ERROR
+
+    try:
+        result = run_github_discovery(
+            args.db_path,
+            args.week_key,
+            args.policy_id,
+            allow_network=bool(args.allow_network),
+            timeout_seconds=args.timeout,
+        )
+    except DiscoveryPolicyError as exc:
+        out.write("config error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
+    except CollectionPolicyError as exc:
+        out.write("policy error: %s\n" % exc)
+        return EXIT_SECURITY
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+
+    # Only safe, payload-free counts. No query, URL, scope key, hash or path.
+    out.write("run_id: %s\n" % result.run_id)
+    out.write("status: %s\n" % result.status)
+    out.write("probes_total: %d\n" % result.probes_total)
+    out.write("probes_blocked: %d\n" % result.probes_blocked)
+    out.write("probes_failed: %d\n" % result.probes_failed)
+    out.write("processed: %d\n" % result.processed)
+    out.write("research: %d\n" % result.research)
+    out.write("watch: %d\n" % result.watch)
+    out.write("rejected: %d\n" % result.rejected)
+    out.write("quarantined: %d\n" % result.quarantined)
+    out.write("selections_total: %d\n" % result.selections_total)
+    out.write("queued: %d\n" % result.queued)
+    out.write("over_budget: %d\n" % result.over_budget)
+    out.write("beyond_candidate_limit: %d\n" % result.beyond_candidate_limit)
+
+    if result.status == "success":
+        return EXIT_OK
+    # partial / failed are non-success completions (degradation is visible).
+    return EXIT_CAPABILITY
+
+
 def main(argv: Optional[list] = None, out=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -708,6 +853,8 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_feedback_sync(args, stream)
     if args.command == "candidate" and args.candidate_command == "qualify-github":
         return cmd_candidate_qualify_github(args, stream)
+    if args.command == "discover" and args.discover_command == "github":
+        return cmd_discover_github(args, stream)
 
     parser.print_help(stream)
     return EXIT_OK

@@ -407,7 +407,7 @@ PYTHONPATH=src python -m ai_signal candidate qualify-github \
 - CLI 输出仅含安全计数（processed/candidates_created/candidates_updated/
   assessments_created/research/watch/rejected/quarantined/markdown_written）。
 
-### 第二阶段 2C2：GitHub Discovery Policy Adapter（进行中）
+### 第二阶段 2C2：GitHub Discovery Policy Adapter（工程完成，待真实运行）
 
 2C2 把 `--lane` 升级为版本化的 GitHub-specific 策略目录
 （`src/ai_signal/discovery/policy.py`），只负责：
@@ -430,6 +430,32 @@ GitHub-specific policy（四条 GitHub Discovery Lane）
 - 输出不是全局 Signal、不是 Event、不产 A–F 素材、不产 Markdown 报告；只写
   `github_discovery_run` / `github_discovery_probe_run` /
   `github_candidate_selection` 三张运行表（加绑定表共四张，迁移 0005）。
-- Watchlist 与 Ecosystem 的目标清单由第一用户确认后在 2C2-C 填入；不读取
-  README/Release 内容；CLI 子命令在 2C2-D 落地。
+- Watchlist 直采走 `GET /repos/{owner}/{repo}`（`github-repos-v1` adapter，
+  同样只存 `full_name_sha256`）；Ecosystem 用 metadata relation
+  （full_name / description / topics，词边界匹配，Gate `candidate-gate-v3`），
+  关系证据保存 `relation_raw_signal_id`，不读取 README/Release 内容。
+- **待第一用户清单**：`watchlist-v1` 与 `ecosystem-v1` 的目录条目目前为空
+  （2026-08-15 未定），填好后即可运行；`mature-v1` / `emerging-v1` 可直接运行。
 - 2C2 完成后停止连续扩展 GitHub，先实施 2C3 source-independent 契约。
+
+CLI（默认 DB-only；网络 probe 必须显式 `--allow-network`，否则退出码 `4`）：
+
+```powershell
+$env:PYTHONPATH = "src"
+
+# 安全查看目录（只输出名称/预算/上限，绝不输出 query）
+python -m ai_signal discover github --list-policies
+
+# 运行一个策略（真实网络需 --allow-network）
+python -m ai_signal discover github --policy emerging-v1 `
+  --db-path ./.ai-signal/ai_signal.db `
+  --week-key 2026-W33 --allow-network
+
+# 查看最近的 discovery 运行
+python -m ai_signal discover github --status --db-path ./.ai-signal/ai_signal.db
+```
+
+退出码沿用约定：成功 `0`，配置错误 `2`，数据库错误 `3`，安全策略阻断 `4`
+（含缺少 `--allow-network`），`partial` / `failed` 完成 `5`。CLI 输出只含安全
+计数（run_id/status/probes_*/processed/research/watch/rejected/quarantined/
+selections_total/queued/over_budget/beyond_candidate_limit）。

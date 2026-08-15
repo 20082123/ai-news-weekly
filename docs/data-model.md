@@ -386,6 +386,22 @@ relation). `UNIQUE (discovery_run_id, candidate_id)` guarantees one final
 selection per candidate per policy run; the row id is deterministic
 (`deterministic_id("github-candidate-selection", run_id, candidate_id)`).
 
+### 2C2-C additions
+
+* **`github-repos-v1` collection adapter** - the watchlist lane collects a
+  direct `GET /repos/{owner}/{repo}` snapshot through `GitHubReposClient`.
+  Its `config_snapshot` whitelist is `run_mode | source | scope_key |
+  adapter_kind | full_name_sha256`; the raw full_name never reaches storage,
+  and direct snapshots never paginate (no `source_cursor` row is created).
+* **Gate `candidate-gate-v3`** - qualification assessments use this policy
+  version whenever an ecosystem relation resolver is supplied. A candidate
+  with a resolved relation (`full_name_match | topic_match |
+  description_mention`) plus a substantive description and recent push
+  reaches `research`; a relation without that baseline stays `watch`, and a
+  query hit without any relation keeps the v2 `watch` +
+  `missing_ecosystem_relation`. Without a resolver the gate stays
+  byte-for-byte v2.
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes
