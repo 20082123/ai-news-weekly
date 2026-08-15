@@ -262,6 +262,28 @@ materialization, then `verified → packaged` after the MaterialPack row is
 persisted - all recorded in `state_transition` (compare-and-swap keeps
 re-runs idempotent).
 
+### Phase 2B3 deltas (no schema change)
+
+* **Claims are natural Chinese sentences** quoting only snapshot fields
+  (URL, updated/pushed timestamps, stars/forks, description, topics,
+  language). Claim ids keep the `deterministic_id("claim", event_id, text)`
+  semantics, so any quoted-value change yields a new claim row while
+  historical claims stay auditable.
+* **Evidence payload** now also carries `description` and `topics`, and
+  evidence ids use the versioned scheme
+  `deterministic_id("evidence-v2", raw_signal_id, SHA256(canonical payload))`.
+  Old evidence rows are immutable and untouched; a changed payload yields a
+  fresh evidence row, and the current `EventTouch` only references the
+  current version.
+* **MaterialPack content schema** is `material-pack-v2` (Chinese A–F angles
+  plus a `project_info` section sourced from the snapshot payload).
+  `bundle_hash`/pack-id determinism is unchanged.
+* **Markdown filenames** are the tentative readable form
+  `<week_key> - GitHub - <repo> (<owner>).md`; `pack_id`/`event_id` live in
+  frontmatter and SQLite only. A rebuild for the same `(event_id, week_key)`
+  updates the existing Inbox file in place, refreshing `target_id` to the new
+  pack id while preserving the six human feedback fields.
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes

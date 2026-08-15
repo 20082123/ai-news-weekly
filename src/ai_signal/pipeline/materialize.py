@@ -25,6 +25,7 @@ nothing is committed.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, List, Mapping, Optional, Tuple
@@ -39,6 +40,7 @@ from ..domain.models import (
     Signal,
     deterministic_id,
     now_utc,
+    sha256_hex,
     validate_scope_key,
 )
 from ..domain.states import can_transition, transition
@@ -342,9 +344,24 @@ def _make_evidence(
         payload["language"] = raw.language
     if raw.pushed_at is not None:
         payload["pushed_at"] = raw.pushed_at
+    # Phase 2B3: description/topics are quoted by Chinese claims, so they must
+    # be part of the traceable evidence payload.
+    if raw.description is not None:
+        payload["description"] = raw.description
+    if raw.topics:
+        payload["topics"] = list(raw.topics)
 
-    # The evidence id must change when the raw snapshot changes.
-    evidence_id = deterministic_id("evidence", raw_signal_id, raw.html_url, snippet)
+    # Versioned, content-addressed evidence id: the explicit "evidence-v2"
+    # prefix plus the canonical payload hash means (a) the id differs from the
+    # phase-2B2 evidence ids when the payload was extended, and (b) any later
+    # change of the referenced fields yields a fresh id. Old evidence rows are
+    # immutable and stay untouched.
+    canonical_payload = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    evidence_id = deterministic_id(
+        "evidence-v2", raw_signal_id, sha256_hex(canonical_payload)
+    )
 
     return Evidence(
         source="github",
@@ -496,19 +513,31 @@ def materialize_github(
             evidence_created += 1
         evidence_repo.upsert(evidence)
 
-        # --- Deterministic factual claims (each bound to evidence) ----------
+        # --- Deterministic factual claims in natural Chinese ---------------
+        # Each claim quotes only snapshot fields that are also present in the
+        # bound evidence payload, so the per-claim validator can trace every
+        # number / URL / date back to it.
         claim_specs: List[str] = [
-            "Repository %s is publicly accessible at %s." % (raw.full_name, raw.html_url),
-            "The repository was last updated at %s." % raw.updated_at,
+            "仓库 %s 可通过 %s 公开访问。" % (raw.full_name, raw.html_url),
+            "最近更新时间为 %s。" % raw.updated_at,
         ]
-        if raw.stargazers_count is not None:
-            claim_specs.append("The repository has %d stargazers." % raw.stargazers_count)
-        if raw.forks_count is not None:
-            claim_specs.append("The repository has %d forks." % raw.forks_count)
+        if raw.stargazers_count is not None or raw.forks_count is not None:
+            counters = []
+            if raw.stargazers_count is not None:
+                counters.append("%d 个 stars" % raw.stargazers_count)
+            if raw.forks_count is not None:
+                counters.append("%d 个 forks" % raw.forks_count)
+            claim_specs.append(
+                "GitHub 当前快照显示该仓库有 %s。" % "、".join(counters)
+            )
+        if raw.description is not None:
+            claim_specs.append("仓库简介为：%s。" % raw.description)
+        if raw.topics:
+            claim_specs.append("仓库 topics 包括：%s。" % "、".join(raw.topics))
         if raw.language is not None:
-            claim_specs.append("The primary language is %s." % raw.language)
+            claim_specs.append("主要语言为 %s。" % raw.language)
         if raw.pushed_at is not None:
-            claim_specs.append("The repository was last pushed to at %s." % raw.pushed_at)
+            claim_specs.append("最近推送时间为 %s。" % raw.pushed_at)
 
         claim_touches: List[ClaimTouch] = []
         for claim_text in claim_specs:

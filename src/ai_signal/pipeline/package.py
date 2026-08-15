@@ -1,10 +1,10 @@
-"""Phase 2B2 A-F material packaging (deterministic, offline, no LLM).
+"""Phase 2B2/2B3 A-F material packaging (deterministic, offline, no LLM).
 
-Builds a structured ``MaterialPack`` (``material-pack-v1``) per Event from the
+Builds a structured ``MaterialPack`` (``material-pack-v2``) per Event from the
 Claims and Evidence produced by :mod:`ai_signal.pipeline.materialize`. The pack
-contains six fixed angles (A-F) plus a score. ``bundle_hash`` is computed from
-canonical JSON of the deterministic content so the same inputs always yield the
-same hash, pack id and Markdown filename.
+contains six fixed angles (A-F, in Chinese) plus a deterministic score.
+``bundle_hash`` is computed from canonical JSON of the content so the same
+inputs always yield the same hash and pack id.
 
 Only the claims/evidence *touched by the current snapshot* are used: the caller
 passes them in explicitly (``ClaimTouch`` records returned by materialize), so
@@ -12,8 +12,8 @@ historical claims/evidence for the same event never leak into the new pack.
 
 A final validator runs before any pack is persisted: every claim must exist,
 every claim must have at least one safe evidence link, and every number / URL /
-date referenced in a claim must be traceable to that *same claim's own*
-evidence (no cross-claim borrowing).
+full date-time referenced in a claim must be traceable to that *same claim's
+own* evidence (no cross-claim borrowing).
 
 ``verified -> packaged`` is advanced here, only after the MaterialPack row has
 been persisted, in the same transaction.
@@ -38,7 +38,7 @@ from ..storage.material_repositories import (
 from ..storage.repositories import SignalRepository, StateTransitionRepository
 
 
-SCHEMA_VERSION = "material-pack-v1"
+SCHEMA_VERSION = "material-pack-v2"
 
 _NUMBER_RE = re.compile(r"\d[\d,]*")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
@@ -52,7 +52,9 @@ class PackageValidationError(Exception):
 
 
 def _strip_trailing_punct(url: str) -> str:
-    return url.rstrip(".,;:!?)]\"'")
+    # Both ASCII and CJK sentence punctuation: Chinese claims end with "。",
+    # which the URL charset would otherwise absorb into the token.
+    return url.rstrip(".,;:!?)]\"'”’》）」』。！？：；，")
 
 
 def _canonical_json(value: Mapping[str, Any]) -> str:
@@ -62,9 +64,9 @@ def _canonical_json(value: Mapping[str, Any]) -> str:
 def _extract_tokens(text: str) -> Tuple[List[str], List[str], List[str]]:
     """Return (numbers, urls, datetimes) found in ``text``.
 
-    URLs have trailing sentence punctuation stripped so a claim ending
-    ``...accessible at https://example.com/repo.`` still matches evidence
-    containing the bare URL ``https://example.com/repo``.
+    URLs have trailing sentence punctuation (ASCII and CJK) stripped so a
+    claim ending ``…可通过 https://github.com/x 公开访问。`` still matches
+    evidence containing the bare URL.
     """
     numbers = [m.group(0).replace(",", "") for m in _NUMBER_RE.finditer(text)]
     urls = [_strip_trailing_punct(u) for u in _URL_RE.findall(text)]
@@ -95,8 +97,27 @@ def _is_safe_https_url(value: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Angle builders
+# Angle builders (Chinese, phase 2B3)
 # --------------------------------------------------------------------------- #
+def _build_project_info(p: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project facts shown in the Markdown 项目信息 section.
+
+    Everything comes from the collected snapshot payload; nothing is
+    fabricated. Missing fields are stored as ``None`` and rendered as 暂无.
+    """
+    return {
+        "full_name": p.get("full_name"),
+        "description": p.get("description"),
+        "topics": list(p.get("topics") or []),
+        "language": p.get("language"),
+        "stargazers_count": p.get("stargazers_count"),
+        "forks_count": p.get("forks_count"),
+        "updated_at": p.get("updated_at"),
+        "pushed_at": p.get("pushed_at"),
+        "html_url": p.get("html_url"),
+    }
+
+
 def _build_a(claim_ids: Tuple[str, ...], claims_text: List[str]) -> Dict[str, Any]:
     return {"claim_ids": list(claim_ids), "facts": claims_text}
 
@@ -108,18 +129,20 @@ def _build_b(evidence_id: str, source: str, url: str, snippet: str) -> Dict[str,
         "url": url,
         "snippet": snippet,
         "unknowns": [
-            "Single GitHub API snapshot; trend or growth cannot be established.",
-            "No historical baselines available in this phase.",
+            "仅基于 GitHub API 单次快照，无法据此证明任何趋势或增长。",
+            "本阶段没有可比较的历史快照基线。",
         ],
-        "limitations": ["Stars/forks are point-in-time counts, not velocities."],
+        "limitations": [
+            "stars/forks 是当前快照的瞬时计数，不代表增长速度。",
+        ],
     }
 
 
-def _build_c(raw_payload: Mapping[str, Any]) -> Dict[str, Any]:
-    stars = raw_payload.get("stargazers_count")
-    forks = raw_payload.get("forks_count")
-    has_desc = "description" in raw_payload
-    has_topics = bool(raw_payload.get("topics"))
+def _build_c(p: Mapping[str, Any]) -> Dict[str, Any]:
+    stars = p.get("stargazers_count")
+    forks = p.get("forks_count")
+    has_desc = "description" in p
+    has_topics = bool(p.get("topics"))
     score = 0.0
     if has_desc:
         score += 0.25
@@ -131,6 +154,12 @@ def _build_c(raw_payload: Mapping[str, Any]) -> Dict[str, Any]:
         score += 0.25
     return {
         "heat_status": "unmeasured",
+        "heat_status_label": "尚未测量",
+        "notes": [
+            "热度趋势尚未测量：缺少历史快照，无法判断是否升温。",
+            "stars/forks 只是当前快照数值，不是增长速度。",
+            "后续积累历史快照后才能比较热度变化。",
+        ],
         "score_components": {
             "has_description": has_desc,
             "has_topics": has_topics,
@@ -138,43 +167,64 @@ def _build_c(raw_payload: Mapping[str, Any]) -> Dict[str, Any]:
             "forks_present": forks is not None,
         },
         "score": round(score, 4),
-        "note": "No historical snapshots; heat is unmeasured, not rising.",
     }
 
 
-def _build_d() -> Dict[str, Any]:
+def _build_d(p: Mapping[str, Any]) -> Dict[str, Any]:
+    full_name = p.get("full_name") or "该仓库"
+    topics = "、".join(list(p.get("topics") or [])[:5]) or "暂无 topics"
+    desc = p.get("description") or "简介暂缺"
     return {
         "editorial_hypothesis": True,
         "angles": [
-            {"who": "knowledge_workers", "note": "May adopt for productivity."},
-            {"who": "companies", "note": "May evaluate for integration."},
-            {"who": "professionals", "note": "May benchmark or extend."},
+            {
+                "who": "knowledge_workers",
+                "who_label": "知识工作者",
+                "note": "可以把 %s（%s）作为效率工具候选进行评估。" % (full_name, desc),
+            },
+            {
+                "who": "companies",
+                "who_label": "公司",
+                "note": "若 %s 与现有技术栈（topics：%s）契合，可评估集成可行性。" % (full_name, topics),
+            },
+            {
+                "who": "professionals",
+                "who_label": "专业人员",
+                "note": "可对 %s 做基准对比或二次开发参考。" % full_name,
+            },
         ],
     }
 
 
-def _build_e() -> Dict[str, Any]:
+def _build_e(p: Mapping[str, Any]) -> Dict[str, Any]:
+    full_name = p.get("full_name") or "该仓库"
     return {
         "type": "manual_test_plan",
         "steps": [
-            "Read the official README, LICENSE and security policy.",
-            "Test in an isolated environment.",
-            "Do not provide credentials.",
-            "Do not run unknown scripts.",
-            "Record version, inputs, outputs and failure conditions.",
+            "阅读 %s 的官方 README、LICENSE 与 security policy。" % full_name,
+            "在隔离环境中测试，不使用生产凭据。",
+            "不提供任何凭据。",
+            "不运行未知脚本。",
+            "记录版本、输入、输出与失败条件。",
         ],
-        "note": "Project code is never auto-executed by this program.",
+        "note": "本项目代码绝不由本程序自动执行。",
     }
 
 
-def _build_f() -> Dict[str, Any]:
+def _build_f(p: Mapping[str, Any]) -> Dict[str, Any]:
+    full_name = p.get("full_name") or "该仓库"
+    language = p.get("language") or "未知语言"
+    desc = p.get("description") or "（简介暂缺）"
     return {
         "editorial_outline": True,
-        "bilibili_outline": "Mother-content outline for a walkthrough video.",
-        "xiaohongshu_points": ["Key takeaway", "Visual hook"],
-        "douyin_hook": "3-second attention hook.",
-        "counter_questions": ["What could go wrong?", "Is it reproducible?"],
-        "resource_leads": ["Official docs", "Related repos"],
+        "bilibili_outline": "以「%s：%s」为题做一期上手演示视频。" % (full_name, desc),
+        "xiaohongshu_points": [
+            "一句话讲清 %s 解决什么问题。" % full_name,
+            "配图展示 %s 项目的核心界面或目录结构。" % language,
+        ],
+        "douyin_hook": "3 秒钩子：这个用 %s 写的 %s，值得花 30 秒看一眼。" % (language, full_name),
+        "counter_questions": ["可能出什么问题？", "结果能否复现？"],
+        "resource_leads": ["官方文档", "相关仓库"],
     }
 
 
@@ -289,7 +339,8 @@ def build_and_store_pack(
     validate_pack(claims_by_id, evidence_by_claim)
     assert first_evidence is not None
 
-    # Load the repository snapshot fields from the Signal payload for scoring.
+    # Load the repository snapshot fields from the Signal payload for scoring
+    # and for the Chinese project-info / editorial angles.
     sig = SignalRepository(conn).get(signal_id)
     repo_payload = dict(sig.payload) if sig is not None else {}
 
@@ -299,6 +350,7 @@ def build_and_store_pack(
     content = {
         "schema_version": SCHEMA_VERSION,
         "signal_card": {"full_name": title, "event_id": event_id},
+        "project_info": _build_project_info(repo_payload),
         "A_what_happened": _build_a(claim_ids, claims_text),
         "B_evidence_limits_unknowns": _build_b(
             first_evidence.id,
@@ -307,9 +359,9 @@ def build_and_store_pack(
             first_evidence.snippet,
         ),
         "C_why_now_heat": _build_c(repo_payload),
-        "D_audience_impacts": _build_d(),
-        "E_manual_test_plan": _build_e(),
-        "F_channel_adaptations": _build_f(),
+        "D_audience_impacts": _build_d(repo_payload),
+        "E_manual_test_plan": _build_e(repo_payload),
+        "F_channel_adaptations": _build_f(repo_payload),
         "score": _build_c(repo_payload),
     }
 

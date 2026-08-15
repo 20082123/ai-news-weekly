@@ -134,6 +134,35 @@ class MaterialPipelineTest(unittest.TestCase):
             ],
         )
 
+    def test_chinese_claims_and_description_topics_traceable(self):
+        self._seed_two_repos()
+        conn = S._open(self.db)
+        conn.execute("BEGIN")
+        mat = materialize_github(conn, WEEK, SCOPE, 10, safe_hosts=FIXTURE_HOSTS)
+        conn.execute("COMMIT")
+        conn.close()
+
+        conn = S._open(self.db)
+        try:
+            texts = [r["text"] for r in conn.execute("SELECT text FROM claim")]
+            joined = " ".join(texts)
+            self.assertIn("公开访问", joined)
+            self.assertIn("个 stars", joined)
+            self.assertIn("仓库简介为", joined)
+            self.assertIn("topics 包括", joined)
+            self.assertIn("主要语言为", joined)
+            # Every Chinese claim is bound to its own evidence.
+            rows = conn.execute(
+                "SELECT ce.claim_id, e.payload FROM claim_evidence ce "
+                "JOIN evidence e ON e.id = ce.evidence_id"
+            ).fetchall()
+            desc_ok = any("description" in json.loads(r["payload"]) for r in rows)
+            topics_ok = any("topics" in json.loads(r["payload"]) for r in rows)
+            self.assertTrue(desc_ok)
+            self.assertTrue(topics_ok)
+        finally:
+            conn.close()
+
     def test_full_chain_packaged_and_exact_counts(self):
         self._seed_two_repos()
         mat, packs = _materialize_and_pack(self.db)
@@ -145,8 +174,8 @@ class MaterialPipelineTest(unittest.TestCase):
             self.assertEqual(_count(conn, "event"), 2)
             self.assertEqual(_count(conn, "event_member"), 2)
             self.assertEqual(_count(conn, "evidence"), 2)
-            self.assertEqual(_count(conn, "claim"), 12)  # 6 per repo
-            self.assertEqual(_count(conn, "claim_evidence"), 12)
+            self.assertEqual(_count(conn, "claim"), 14)  # 7 per repo (Chinese claims)
+            self.assertEqual(_count(conn, "claim_evidence"), 14)
             self.assertEqual(_count(conn, "material_pack"), 2)
             self.assertEqual(_count(conn, "state_transition"), 8)  # 4 per signal
             states = [r["state"] for r in conn.execute("SELECT state FROM signal")]

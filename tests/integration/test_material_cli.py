@@ -152,6 +152,50 @@ class MaterializeCliTest(unittest.TestCase):
         inbox = self.output / "Inbox"
         self.assertEqual(len(list(inbox.glob("*.md"))), 1)
 
+    def test_readable_filename_and_chinese_body(self):
+        _seed(self.db, [("r1", "ai-agents-v1", _gh_payload(1, 10, TS))])
+        rc, _ = self._run(["--allow-output-write"])
+        self.assertEqual(rc, 0)
+        inbox = self.output / "Inbox"
+        expected = inbox / "2026-W33 - GitHub - example-1 (github-org).md"
+        self.assertTrue(expected.exists())
+        text = expected.read_text(encoding="utf-8")
+        for heading in (
+            "## 项目信息",
+            "## A — 发生了什么",
+            "## 事实声明与来源",
+            "## 人工反馈填写说明",
+        ):
+            self.assertIn(heading, text)
+        # 64-hex pack id lives in frontmatter only, never in the filename.
+        import re as _re
+
+        self.assertIsNone(_re.search(r"[0-9a-f]{64}", expected.name))
+
+    def test_claims_render_fact_text_and_c_notes_in_real_markdown(self):
+        _seed(self.db, [("r1", "ai-agents-v1", _gh_payload(1, 10, TS))])
+        rc, _ = self._run(["--allow-output-write"])
+        self.assertEqual(rc, 0)
+        path = self.output / "Inbox" / "2026-W33 - GitHub - example-1 (github-org).md"
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "src"))
+        from ai_signal.feedback.frontmatter import parse_frontmatter
+
+        fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        # Chinese fact text with its own evidence link, no 64-hex claim id.
+        self.assertIn(
+            "可通过 https://github.com/github-org/example-1 公开访问。 — [来源](", body
+        )
+        self.assertIn("GitHub 当前快照显示该仓库有 10 个 stars、1 个 forks。", body)
+        self.assertIsNone(__import__("re").search(r"[0-9a-f]{64}", body))
+        # C notes all rendered.
+        for note in (
+            "热度趋势尚未测量",
+            "不是增长速度",
+            "历史快照",
+        ):
+            self.assertIn("- 说明：", body)
+            self.assertIn(note, body)
+
     def test_markdown_failure_keeps_pack_and_reports_output_error(self):
         import ai_signal.outputs.markdown as md_module
 

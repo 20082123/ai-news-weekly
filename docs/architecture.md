@@ -268,6 +268,42 @@ Key design rules:
   database failure propagates so the whole sync transaction rolls back - a
   single invalid file is skipped, never half-committed.
 
+## Phase 2B3: Chinese material + readable filenames
+
+Phase 2B3 changes the presentation layer only; collection, attribution and the
+packaging data flow stay exactly as in 2B2.
+
+* **Readable tentative filenames.** ``Inbox/<week_key> - GitHub - <repo>
+  (<owner>).md`` where owner/repo come from the validated GitHub
+  ``full_name``. The policy is encapsulated in
+  ``outputs.markdown.build_markdown_filename`` (Windows-illegal characters,
+  control characters, trailing spaces/dots and reserved device names
+  sanitized; length cap) so it can be swapped later. A short ``event_id``
+  suffix is only appended on truncation or a collision with a different
+  event. ``pack_id``/``event_id`` stay in frontmatter + SQLite only.
+* **Rebuild semantics.** A rebuild finds the existing Inbox file for the same
+  ``(event_id, week_key)`` (by frontmatter, not by name) and updates it in
+  place: human feedback fields are preserved and ``target_id`` is refreshed to
+  the new pack id after validating the old one is 64-hex. Files whose
+  ``event_id``/``week_key`` do not match are never overwritten (a collision
+  falls back to a suffixed name); a file with unparseable frontmatter at the
+  target name is refused, not overwritten.
+* **Chinese body, machine frontmatter.** The six A–F angles, the claims
+  section (「事实声明与来源」) and a Chinese human-feedback guide are rendered
+  in Chinese; frontmatter field names and the ``decision`` enum stay English
+  so ``feedback sync`` remains compatible. Repository names, URLs, languages
+  and raw topics are never translated.
+* **Chinese factual claims.** Claims are natural Chinese sentences quoting
+  only snapshot fields; ``description`` and ``topics`` were added to the
+  evidence payload so they remain traceable. Evidence ids moved to a
+  versioned scheme (``evidence-v2`` + canonical payload hash): the payload
+  extension produces fresh ids while all old evidence rows stay immutable.
+* **Pack schema ``material-pack-v2``.** The A–F templates now reference the
+  current repository's ``full_name``/``description``/``topics``/``language``
+  where possible, and a ``project_info`` section carries the snapshot facts
+  shown in the Markdown. Angle C keeps heat explicitly unmeasured (single
+  snapshot, no trend claims).
+
 ### What is deliberately not in 2A
 
 * Network collection and a real GitHub HTTP client.

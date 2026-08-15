@@ -276,3 +276,33 @@ PYTHONPATH=src python -m ai_signal feedback sync \
 - 缺少 `--allow-feedback-write` 时返回退出码 `4`，不改数据库。
 - 仅扫描 inbox 第一层 `.md` 文件，不递归，不读 symlink。
 - 输出仅含 `scanned`、`inserted`、`skipped`、`invalid` 计数。
+
+### 第二阶段 2B3：中文化素材与可读文件名
+
+2B3 把素材正文改成中文，并使用暂定的可读文件名：
+
+```
+<week_key> - GitHub - <repo> (<owner>).md
+```
+
+- owner/repo 取自经过验证的 GitHub `full_name`；`pack_id`、`event_id` 完整保存在
+  frontmatter 与 SQLite 中，不进入正常文件名。
+- 文件名策略封装在 `build_markdown_filename` 中，便于后续替换；Windows 非法字符、
+  控制字符、结尾空格/句点与保留设备名会被清理，并有长度上限；仅在截断或碰撞时附
+  加 `event_id` 短后缀。
+- 同一 event/week 重跑只更新同一可读文件；产生新 `pack_id` 时保留人工反馈字段并
+  把 frontmatter `target_id` 更新为新 pack id；`event_id`/`week_key` 不匹配的文件
+  绝不覆盖。
+- 事实声明改为自然中文（如「仓库 X 可通过 URL 公开访问」「GitHub 当前快照显示该
+  仓库有 N 个 stars、M 个 forks」），每条声明仍绑定自己的 Evidence，数字、URL、
+  完整日期必须可追溯；description/topics 已加入 Evidence payload，Evidence ID 使用
+  带版本前缀（`evidence-v2`）+ 规范化 payload hash 的新确定性 ID，旧 Evidence 保持
+  不可变。
+- 素材包 schema 升级为 `material-pack-v2`，A–F 全部为中文（A 发生了什么 / B 证据、
+  限定与未知 / C 为什么现在值得关注 / D 对不同受众的影响（编辑假设）/ E 本周亲测
+  方案 / F B站 / 小红书 / 抖音改编思路），Claims 一节改为「事实声明与来源」，并附
+  中文人工反馈填写说明（机器字段名与 decision 枚举保持英文以兼容 feedback sync）。
+- C 节明确标注热度趋势尚未测量、stars/forks 是瞬时快照、需历史快照才能判断升温；
+  不生成「爆火、快速增长、行业领先」等单次快照无法证明的结论。
+- 仓库名、URL、编程语言与原始 topics 不做翻译；正文展示的项目信息全部来自已采集
+  payload，不自行编造。
