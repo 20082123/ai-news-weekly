@@ -1,5 +1,11 @@
 # Data model
 
+> **文档职责说明（2026-08-15）：** 本文件只负责数据库表、字段、约束和领域对象，
+> 不负责产品目标、路线图或当前状态。项目入口见
+> [00-PRODUCT.md](./00-PRODUCT.md)、[01-ROADMAP.md](./01-ROADMAP.md) 与
+> [02-STATUS.md](./02-STATUS.md)。历史模型不等于未来 source-independent
+> Event / Research Dossier 的最终 schema。
+
 This document describes the v1 SQLite schema (`storage/migrations/0001_initial.sql`)
 and the domain objects that map to it.
 
@@ -8,8 +14,12 @@ and the domain objects that map to it.
 * **Timestamps** are stored as ISO-8601 UTC text and modeled in Python as
   timezone-aware `datetime` objects. Naive datetimes are rejected at the
   domain layer (`ensure_aware_utc`).
-* **Run-scoped ids** (collection run, feedback, score log, state-transition
-  row) use random UUID4 so they are globally unique per execution.
+* **Run-scoped ids** (collection run, score log, state-transition row) use
+  random UUID4 so they are globally unique per execution. A `Feedback`
+  constructed directly without an id also defaults to UUID4; the Phase 2B2
+  Markdown feedback-sync path explicitly supplies a deterministic id derived
+  from target id + the six canonical feedback fields, making repeat sync
+  idempotent.
 * **Stable entity ids** (raw signal, signal, event, evidence, …) use
   deterministic SHA-256 ids derived from their canonical parts, so the same
   inputs always produce the same id across runs.
@@ -322,6 +332,59 @@ never the raw payload, never credentials, never quarantined content.
 A candidate is neither a `signal`, an `event` nor a `material_pack`: the
 qualification path writes only these three tables. The 2B `materialize` flow
 remains as a legacy compatibility path.
+
+## Phase 2C2: GitHub discovery policy tables (migration 0005)
+
+Migration `0005_github_discovery_policy.sql` adds four GitHub-specific tables
+(purely additive; 0001-0004 are immutable). They orchestrate GitHub discovery
+only - they do NOT model global Signals or Events.
+
+### `github_discovery_run`
+
+One row per execution of one `GitHubDiscoveryPolicy` (run-scoped UUID4). It
+records `policy_id`, the full canonical `policy_hash` (SHA-256 of the whole
+policy definition), `week_key`, `lane`, the agreed `candidate_limit` /
+`research_budget`, `status` (`running | success | partial | failed`), a JSON
+array of stable warning codes and start/finish timestamps.
+
+### `github_discovery_probe_run`
+
+One row per probe execution inside a discovery run: `probe_id`, `kind`
+(`search | watchlist_target | ecosystem_target`), `lane`, `scope_key`,
+`spec_hash` (SHA-256 over `(kind, spec)` - the raw query never reaches
+storage), `priority`, the linked `collection_run_id`, `status`
+(`running | success | partial | failed | blocked`) and safe counters.
+`blocked` means the probe was refused BEFORE any network request.
+
+### `github_discovery_scope_binding` (scope/spec firewall)
+
+One immutable row per `scope_key` claiming it for one probe spec. The binding
+is recorded before the first network request and its `spec_hash` is never
+updated. Before a probe runs, the pipeline checks:
+
+* an existing binding with a different `spec_hash` -> `SCOPE_SPEC_MISMATCH`,
+  refused before networking;
+* no binding but a `source_cursor` row already exists for the scope (an
+  unbound legacy scope such as `ai-agents-v1`) -> `SCOPE_UNBOUND_CURSOR`,
+  refused before networking.
+
+Changing probe semantics therefore requires bumping the scope version
+(`ghp-emerging-v1-q1` -> `ghp-emerging-v2-q1`): a new scope starts a fresh
+cursor and old progress is never inherited by a different query.
+
+### `github_candidate_selection`
+
+The final per-run selection of a research candidate into the queue. Only
+`qualification_decision = research` candidates are selected. `selection_rank`
+orders them; ranks below `research_budget` get `queue_state = queued`, the
+rest `over_budget` with `budget_reason = RESEARCH_BUDGET_EXCEEDED`. The
+qualification decision is stored verbatim and is NEVER downgraded by the
+budget. Ecosystem selections additionally carry `ecosystem_target`,
+`relation_kind` (`full_name_match | description_mention | topic_match`),
+`relation_field` and `relation_raw_signal_id` (the snapshot that evidenced the
+relation). `UNIQUE (discovery_run_id, candidate_id)` guarantees one final
+selection per candidate per policy run; the row id is deterministic
+(`deterministic_id("github-candidate-selection", run_id, candidate_id)`).
 
 ## Data retention and the credentials-must-not-enter principle
 

@@ -2,6 +2,30 @@
 
 一个用于自动生成并发送 AI 周报的 Python 项目。脚本会抓取近期 AI 新闻和 GitHub Trending 项目，调用大模型生成中文周报，并通过邮件发送。
 
+## North Star
+
+> **AI Signal Agent 以受众为先、与来源无关。Sources are sensors, not the
+> product taxonomy.** 系统只优先追踪那些会实质改变目标用户如何工作、创作、
+> 决策或花钱的 AI 变化，并告诉他现在应该做什么；GitHub、Official、X、
+> Reddit 都只是传感器，不是产品分类。
+
+## 项目导航：先读这里
+
+本仓库现在包含两部分：继续在线运行的 **V0 邮件周报**，以及尚未切换生产的
+**AI Signal Agent shadow 新管线**。如果要理解项目目标、当前进度或规划开发任务，
+请不要从 README 后面的累计阶段记录推断现状，按以下顺序阅读：
+
+1. [当前状态](./docs/02-STATUS.md)：今天实际做到哪里、什么已验证；
+2. [产品总纲](./docs/00-PRODUCT.md)：为什么做、服务谁、什么才算有价值；
+3. [阶段路线图](./docs/01-ROADMAP.md)：每个阶段做完后用户能得到什么；
+4. [目标架构](./docs/03-ARCHITECTURE.md)：当前三条路径和未来端到端结构；
+5. [黄金样例](./docs/04-GOLDEN-EXAMPLES.md)：什么是好 Signal、好 Dossier 和必须拒绝的结果；
+6. [决策记录](./docs/05-DECISIONS.md)：为什么调整方向、哪些决定仍待验证。
+
+任何 Codex、ZCode 或其他开发会话在规划新功能前，都应先读取以上文件，尤其是
+`02-STATUS.md`。`README.md` 只负责项目入口与运行说明；阶段定义以 Roadmap 为准，
+当前进度以 Status 为准。
+
 ## 功能
 
 - 通过 Tavily 获取近一周 AI 相关新闻。
@@ -87,16 +111,21 @@ TEST_MODE=true
 
 ## AI Signal Agent 影子重构
 
-仓库中新增了 `src/ai_signal/` 包，作为周报流程的“影子重构”基础。
-目前它只是离线基础设施，**尚未切换 `main.py`，也尚未修改 GitHub Actions 的
-weekly 工作流**，生产线上仍然由 `python main.py` 负责。
+仓库中新增了 `src/ai_signal/` 包，作为周报流程的 shadow 新管线。它已经从最初的
+离线基础设施推进到 GitHub 真实只读采集、2B 素材原型和 2C1 Candidate
+Qualification；但它**尚未切换 `main.py`，也尚未修改 GitHub Actions weekly
+工作流**，生产线上仍然由 `python main.py` 负责。
 
-这一阶段只交付：标准 Python 包结构、领域模型、状态机、来源契约、本地
-SQLite v1 与迁移、离线 CLI，以及带脱敏的结构化日志。它**不**实现真实采集、
-LLM 调用、素材包生成、Obsidian 发布或邮件切换。
+在 shadow 代码历史中，2C Candidate 是取代 2B 直接素材化的后续基础。2026-08-15
+起，2C2 已按第一用户决定重启为 **GitHub-specific Discovery Policy
+Adapter**（DEC-013）：GitHub 是第一个实现的传感器（first implemented
+sensor），四条发现车道（Watchlist / Mature / Emerging / Ecosystem）是
+**GitHub-specific Discovery Lanes**，不是全局 Signal Taxonomy。2B
+`materialize github` / A–F 输出只保留为兼容原型，不代表素材质量已通过。准确状态和后续顺序见
+[当前状态](./docs/02-STATUS.md) 与 [阶段路线图](./docs/01-ROADMAP.md)。
 
-> 说明：该包默认以 `shadow` 模式运行，网络、邮件与发布能力一律关闭。
-> 只有在显式切换到 `live` 模式后才会开启，而这一阶段并不做此切换。
+下面各小节保留为历史实现与命令记录；其中“本阶段不做”的描述只适用于对应历史
+阶段，不能解释为整个 shadow 管线今天仍未实现。
 
 第一阶段离线 CLI 已实现。由于仓库采用标准 `src` layout 且本阶段不安装包，
 先在当前 PowerShell 会话设置模块搜索路径：
@@ -118,9 +147,9 @@ python -m ai_signal doctor
 ```
 
 相关文档见 [docs/architecture.md](./docs/architecture.md) 与
-[docs/data-model.md](./docs/data-model.md)。该重构是纯增量改动，删除
-`src/ai_signal/`、`tests/`、`docs/`、`pyproject.toml` 即可完整回滚，不会
-影响现有 legacy 流程。
+[docs/data-model.md](./docs/data-model.md)。最初 Phase 1 是纯增量改动，但该历史
+回滚描述已经不再适用：这些目录现在包含 2A～2C 与权威控制文档，**不得整体删除**。
+当前安全回滚规则见 [docs/architecture.md 的 Rollback](./docs/architecture.md#rollback)。
 
 ### 第二阶段 2A：GitHub 离线增量采集（fixture 模式）
 
@@ -130,8 +159,8 @@ JSON fixture，经过 `GitHubSource` 解析为 `SourceBatch`，再由 pipeline �
 
 明确说明：
 
-- **GitHub 网络采集尚未启用**。2A 只支持 fixture，不存在 online/real/live 网络
-  模式，也不调用 Agent-Reach。
+- **在 2A 交付时，GitHub 网络采集尚未启用**。2A 本身只支持 fixture；真实只读
+  GitHub REST 后续已作为 2B1 实现。
 - **GitHub Actions 与 `main.py` 仍未切换**，生产仍由 `python main.py` 负责。
 - 该路径默认 `shadow`，cursor 仅在某次采集 `success` 且返回了与当前值不同的
   非空 next cursor 时才推进；末页、重复 cursor、`partial` / `unavailable` /
@@ -348,10 +377,59 @@ Discovery（GitHub Search 采集）
 - 现有 `materialize github` 与 A–F 流程保留为 Phase 2B legacy 兼容路径，不删除、
   不作为新流程推荐入口。
 
+默认 DB-only，不产生 Markdown：
+
 ```bash
-PYTHONPATH=src python -m ai_signal candidate qualify-github   --db-path ./.ai-signal/ai_signal.db   --week-key 2026-W33   --scope-key emerging-ai-agent-v1   --lane emerging   --limit 50   --output-root ./.ai-signal   --allow-output-write
+PYTHONPATH=src python -m ai_signal candidate qualify-github \
+  --db-path ./.ai-signal/ai_signal.db \
+  --week-key 2026-W33 \
+  --scope-key emerging-ai-agent-v1 \
+  --lane emerging \
+  --limit 50
 ```
 
-- 缺少 `--allow-output-write` 时返回退出码 `4`：不创建/迁移数据库、不写 Markdown。
+只有需要输出调试 Candidate Card 时，才同时提供全部三个写入参数：
+
+```bash
+PYTHONPATH=src python -m ai_signal candidate qualify-github \
+  --db-path ./.ai-signal/ai_signal.db \
+  --week-key 2026-W33 \
+  --scope-key emerging-ai-agent-v1 \
+  --lane emerging \
+  --limit 50 \
+  --emit-candidate-markdown \
+  --output-root ./.ai-signal \
+  --allow-output-write
+```
+
+- 仅请求 `--emit-candidate-markdown` 却缺少 `--allow-output-write` 时返回退出码 `4`，
+  不创建/迁移数据库、不写 Markdown；普通 DB-only qualification 不需要该写入授权。
 - CLI 输出仅含安全计数（processed/candidates_created/candidates_updated/
   assessments_created/research/watch/rejected/quarantined/markdown_written）。
+
+### 第二阶段 2C2：GitHub Discovery Policy Adapter（进行中）
+
+2C2 把 `--lane` 升级为版本化的 GitHub-specific 策略目录
+（`src/ai_signal/discovery/policy.py`），只负责：
+
+```text
+GitHub-specific policy（四条 GitHub Discovery Lane）
+→ GitHub collection（复用 2A/2B1，scope_key 游标）
+→ GitHub Candidate Qualification（复用 2C1 Gate）
+→ Candidate 级去重与研究预算
+→ GitHub Research Queue（DB-only）
+```
+
+- 四个策略与预算：`watchlist-v1` 20/5、`mature-v1` 50/5、`emerging-v1` 100/8、
+  `ecosystem-v1` 50/5（候选上限 / 研究队列上限）。
+- 每条 probe 独占 `scope_key`；scope 与 probe spec hash 硬绑定（迁移 0005 的
+  `github_discovery_scope_binding`），已存在游标的 scope 若新 spec 不同会在
+  **联网前**拒绝，新 query 永远不能继承旧 query 的分页游标。
+- 超预算的 research 候选只标 `queue_state = over_budget`，qualification 决定
+  绝不降级。
+- 输出不是全局 Signal、不是 Event、不产 A–F 素材、不产 Markdown 报告；只写
+  `github_discovery_run` / `github_discovery_probe_run` /
+  `github_candidate_selection` 三张运行表（加绑定表共四张，迁移 0005）。
+- Watchlist 与 Ecosystem 的目标清单由第一用户确认后在 2C2-C 填入；不读取
+  README/Release 内容；CLI 子命令在 2C2-D 落地。
+- 2C2 完成后停止连续扩展 GitHub，先实施 2C3 source-independent 契约。

@@ -1,9 +1,15 @@
 # Architecture
 
+> **文档职责说明（2026-08-15）：** 本文件保留各历史提交的累计实现细节，供代码
+> 追溯使用，不再负责产品目标、当前状态或未来阶段定义。请先读
+> [00-PRODUCT.md](./00-PRODUCT.md)、[01-ROADMAP.md](./01-ROADMAP.md)、
+> [02-STATUS.md](./02-STATUS.md) 与 [03-ARCHITECTURE.md](./03-ARCHITECTURE.md)。
+> 下文出现的 `current` 或“未来阶段”应按其所在历史小节理解。
+
 This document describes the **AI Signal Agent** shadow rewrite and how it
 coexists with the legacy weekly pipeline.
 
-## Two paths, one repository
+## Historical Phase 1 view: two paths, one repository
 
 The repository runs two independent paths during phase 1.
 
@@ -120,7 +126,9 @@ Key points:
 
 * **Offline only.** The client is `FixtureGitHubClient`, which reads a local
   JSON file. There is no online/real/live network mode in 2A and no call to
-  Agent-Reach. A real GitHub client is deferred to a later phase.
+  Agent-Reach. A real GitHub client is deferred to a later phase. *(The real
+  GitHub client was subsequently implemented as **2B1** - see below; this
+  paragraph records the original 2A boundary only.)*
 * **Progress is isolated by `(source, scope_key)`.** A `scope_key` is a stable
   logical collection alias (for example `ai-agents-v1`,
   `github-fixture-v1`) - never the raw GitHub query, a URL, a file path or a
@@ -375,29 +383,67 @@ new recommended path::
 The existing `materialize github` / A-F flow remains as the Phase 2B legacy
 compatibility path - not deleted, not the recommended entry point.
 
-### What is deliberately not in 2A
+### 2C2 (in progress: GitHub-specific Discovery Policy Adapter)
 
-* Network collection and a real GitHub HTTP client.
-* Agent-Reach doctor / reachability checks.
-* A real read-only smoke run against live data.
+2C2 (DEC-013) turns the ad-hoc `--lane` flag into a versioned, in-code
+`GitHubDiscoveryPolicy` catalog (`src/ai_signal/discovery/policy.py`) with
+four policies matching the four GitHub Discovery Lanes:
 
-These belong to **2A-2** (Agent-Reach doctor and a real read-only smoke), which
-runs only after the offline path is verified end to end.
+```
+watchlist-v1  (targets: first-user list, filled in 2C2-C)
+mature-v1     3 search probes, stars>=100 de-noising, budget 50/5
+emerging-v1   3 search probes, no minimum stars, budget 100/8
+ecosystem-v1  (targets + aliases: first-user list, filled in 2C2-C)
+```
+
+Key rules:
+
+* **One probe, one scope, one cursor.** Every probe owns a unique
+  `scope_key`; the raw query exists only in memory and only `spec_hash` is
+  persisted or compared.
+* **Scope/spec firewall.** `github_discovery_scope_binding` (migration 0005)
+  claims each scope for its spec before the first network request. An
+  existing cursor with a different `spec_hash` (or an unbound legacy scope)
+  blocks the probe BEFORE any network access - a new query can never inherit
+  an old query's pagination cursor. Semantic changes bump the scope version.
+* **Reuse, not re-invention.** Probes drive the existing
+  `collect_source_once` (2A/2B1) and `qualify_github` (2C1) unchanged.
+* **Candidate-level dedup + budget.** The run deduplicates candidates across
+  probes, ranks them deterministically (probe priority, then assessment
+  recency, then candidate id - no LLM ranking), and splits the research
+  queue at `research_budget`: within budget `queued`, beyond it
+  `over_budget`. The qualification decision is never downgraded by budget.
+* **Output is a GitHub Research Queue only** - `github_candidate_selection`
+  rows, DB-only. No Events, no A-F packs, no Markdown reports, no global
+  Signal taxonomy. Watchlist observes repository metadata only (no README /
+  Release content); Ecosystem relations are metadata-only
+  (`full_name | description | topics` matches against first-user aliases),
+  README confirmation is deferred to 2D.
+
+### Historical boundary of the original 2A delivery
+
+At the time 2A was delivered it deliberately excluded:
+
+* network collection and a real GitHub HTTP client;
+* Agent-Reach doctor / reachability checks;
+* a real read-only smoke run against live data.
+
+The GitHub HTTP client was subsequently implemented as **2B1** and has had a
+controlled real run. This paragraph records the original 2A boundary; it is
+not the current project status. Current facts are owned by
+[02-STATUS.md](./02-STATUS.md).
 
 ## Rollback
 
-Phase 1 is purely additive: it introduces `src/ai_signal/**`, `tests/**`,
-`docs/**`, `pyproject.toml` and extends `.gitignore`. It touches no legacy
-file. Rolling back phase 1 therefore means simply removing these additions;
-the legacy pipeline keeps working unmodified because it never depended on
-them.
+The original Phase 1 was purely additive, but its early “delete all added
+directories” rollback recipe is no longer safe: `src/ai_signal/`, `tests/`
+and `docs/` now contain the later 2A–2C work and the authoritative project
+control documents.
 
-To undo the shadow foundation:
-
-1. delete `src/ai_signal/`, `tests/`, `docs/`, `pyproject.toml`;
-2. revert the appended section of `README.md` and the appended lines in
-   `.gitignore`;
-3. remove any local `*.db` / `*.sqlite` artifacts created by `db init`
-   (they are git-ignored and never referenced by `main.py`).
-
-No `main.py`, workflow, secret or schedule needs to change to roll back.
+The current production safety boundary is simpler: the workflow still runs
+`python main.py`, so leaving the shadow path disconnected requires no file
+deletion. To undo a shadow change, identify the exact phase/commit in
+[02-STATUS.md](./02-STATUS.md), use an auditable Git revert after review,
+back up any local database before migration changes, and run the full test
+suite plus legacy contract afterward. Never remove the whole shadow tree as a
+generic rollback action.
