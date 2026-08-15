@@ -1042,3 +1042,242 @@ class CandidateAssessment:
         if self.assessed_at is None:
             object.__setattr__(self, "assessed_at", now_utc())
         _normalize_datetimes(self, ("assessed_at",))
+
+
+# --------------------------------------------------------------------------- #
+# GitHub discovery policy (phase 2C2, GitHub-specific)
+# --------------------------------------------------------------------------- #
+# These tables/objects are deliberately GitHub-specific. They orchestrate
+# GitHub collection + candidate qualification + per-candidate dedup + the
+# research budget, and produce a GitHub Research Queue - NOT global Signals,
+# NOT Events, NOT A-F MaterialPacks.
+GITHUB_DISCOVERY_LANES = ("watchlist", "mature", "emerging", "ecosystem")
+GITHUB_DISCOVERY_RUN_STATUSES = ("running", "success", "partial", "failed")
+GITHUB_PROBE_KINDS = ("search", "watchlist_target", "ecosystem_target")
+GITHUB_PROBE_RUN_STATUSES = ("running", "success", "partial", "failed", "blocked")
+GITHUB_QUEUE_STATES = ("queued", "over_budget")
+GITHUB_RELATION_KINDS = ("full_name_match", "description_mention", "topic_match")
+
+# Stable warning codes for probe runs (payload-free).
+WARN_SCOPE_SPEC_MISMATCH = "SCOPE_SPEC_MISMATCH"
+WARN_SCOPE_UNBOUND_CURSOR = "SCOPE_UNBOUND_CURSOR"
+WARN_PROBE_UNSUPPORTED = "PROBE_UNSUPPORTED"
+
+# Stable budget reason code for research candidates beyond the budget.
+BUDGET_REASON_EXCEEDED = "RESEARCH_BUDGET_EXCEEDED"
+
+
+def _require_hex64(value: Any, name: str) -> None:
+    if not isinstance(value, str) or len(value) != 64:
+        raise ValueError("%s must be a 64-character hex string" % name)
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise ValueError("%s must be a hex string" % name) from exc
+
+
+@dataclass(frozen=True)
+class GitHubDiscoveryRun:
+    """One execution of one :class:`GitHubDiscoveryPolicy` (run-scoped)."""
+
+    policy_id: str
+    policy_hash: str
+    week_key: str
+    lane: str
+    candidate_limit: int
+    research_budget: int
+    started_at: datetime
+    status: str = "running"
+    finished_at: Optional[datetime] = None
+    warnings: Tuple[str, ...] = ()
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.policy_id.strip():
+            raise ValueError("policy_id must not be empty")
+        _require_hex64(self.policy_hash, "policy_hash")
+        if not str(self.week_key).strip():
+            raise ValueError("week_key must not be empty")
+        if self.lane not in GITHUB_DISCOVERY_LANES:
+            raise ValueError("invalid lane: %r" % self.lane)
+        for name in ("candidate_limit", "research_budget"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("%s must be a non-negative integer" % name)
+        if self.status not in GITHUB_DISCOVERY_RUN_STATUSES:
+            raise ValueError("invalid discovery run status: %r" % self.status)
+        object.__setattr__(self, "warnings", as_tuple(self.warnings))
+        if not all(isinstance(warning, str) for warning in self.warnings):
+            raise TypeError("warnings must contain strings")
+        if self.id == "":
+            object.__setattr__(self, "id", generate_run_id())
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        _normalize_datetimes(self, ("started_at", "finished_at", "created_at"))
+        if self.finished_at is not None and self.finished_at < self.started_at:
+            raise ValueError("finished_at must not be earlier than started_at")
+
+
+@dataclass(frozen=True)
+class GitHubDiscoveryProbeRun:
+    """One probe execution inside a :class:`GitHubDiscoveryRun` (run-scoped).
+
+    A probe is blocked BEFORE any network request when its scope_key is bound
+    to a different spec_hash or already owns an unbound legacy cursor; the
+    run keeps going with ``status = blocked``.
+    """
+
+    discovery_run_id: str
+    probe_id: str
+    kind: str
+    lane: str
+    scope_key: str
+    spec_hash: str
+    priority: int
+    started_at: datetime
+    status: str = "running"
+    collection_run_id: Optional[str] = None
+    item_count: int = 0
+    warning_count: int = 0
+    warnings: Tuple[str, ...] = ()
+    finished_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.discovery_run_id:
+            raise ValueError("discovery_run_id must not be empty")
+        if not self.probe_id.strip():
+            raise ValueError("probe_id must not be empty")
+        if self.kind not in GITHUB_PROBE_KINDS:
+            raise ValueError("invalid probe kind: %r" % self.kind)
+        if self.lane not in GITHUB_DISCOVERY_LANES:
+            raise ValueError("invalid lane: %r" % self.lane)
+        object.__setattr__(self, "scope_key", validate_scope_key(self.scope_key))
+        _require_hex64(self.spec_hash, "spec_hash")
+        for name in ("priority", "item_count", "warning_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("%s must be a non-negative integer" % name)
+        if self.status not in GITHUB_PROBE_RUN_STATUSES:
+            raise ValueError("invalid probe run status: %r" % self.status)
+        object.__setattr__(self, "warnings", as_tuple(self.warnings))
+        if not all(isinstance(warning, str) for warning in self.warnings):
+            raise TypeError("warnings must contain strings")
+        if self.warning_count != len(self.warnings):
+            raise ValueError("warning_count must equal the number of warnings")
+        if self.collection_run_id is not None and not self.collection_run_id:
+            raise ValueError("collection_run_id must be a non-empty string or None")
+        if self.id == "":
+            object.__setattr__(self, "id", generate_run_id())
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        _normalize_datetimes(self, ("started_at", "finished_at", "created_at"))
+        if self.finished_at is not None and self.finished_at < self.started_at:
+            raise ValueError("finished_at must not be earlier than started_at")
+
+
+@dataclass(frozen=True)
+class GitHubScopeBinding:
+    """Immutable claim of a scope_key by one probe spec.
+
+    The binding is recorded before the first network request for a scope.
+    ``spec_hash`` never changes afterwards: a later run with a different spec
+    hash for the same scope is refused before networking.
+    """
+
+    scope_key: str
+    probe_id: str
+    policy_id: str
+    spec_hash: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "scope_key", validate_scope_key(self.scope_key))
+        if not self.probe_id.strip():
+            raise ValueError("probe_id must not be empty")
+        if not self.policy_id.strip():
+            raise ValueError("policy_id must not be empty")
+        _require_hex64(self.spec_hash, "spec_hash")
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.created_at)
+        _normalize_datetimes(self, ("created_at", "updated_at"))
+
+
+def github_candidate_selection_entity_id(
+    discovery_run_id: str, candidate_id: str
+) -> str:
+    """Deterministic selection id: one final selection per (run, candidate)."""
+    return deterministic_id(
+        "github-candidate-selection", discovery_run_id, candidate_id
+    )
+
+
+@dataclass(frozen=True)
+class GitHubCandidateSelection:
+    """The final per-run selection of a research candidate into the queue.
+
+    Only ``qualification_decision = research`` candidates are selected. The
+    budget only changes ``queue_state``; the qualification decision is stored
+    verbatim and is never downgraded by ``over_budget``.
+    """
+
+    discovery_run_id: str
+    candidate_id: str
+    winning_discovery_id: str
+    winning_assessment_id: str
+    selection_rank: int
+    qualification_decision: str
+    queue_state: str
+    created_at: datetime
+    budget_reason: Optional[str] = None
+    ecosystem_target: Optional[str] = None
+    relation_kind: Optional[str] = None
+    relation_field: Optional[str] = None
+    relation_raw_signal_id: Optional[str] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        for name in (
+            "discovery_run_id",
+            "candidate_id",
+            "winning_discovery_id",
+            "winning_assessment_id",
+        ):
+            if not getattr(self, name):
+                raise ValueError("%s must not be empty" % name)
+        if isinstance(self.selection_rank, bool) or not isinstance(
+            self.selection_rank, int
+        ):
+            raise TypeError("selection_rank must be a non-negative integer")
+        if self.selection_rank < 0:
+            raise ValueError("selection_rank must be a non-negative integer")
+        if self.qualification_decision not in CANDIDATE_DECISIONS:
+            raise ValueError(
+                "invalid qualification_decision: %r" % self.qualification_decision
+            )
+        if self.queue_state not in GITHUB_QUEUE_STATES:
+            raise ValueError("invalid queue_state: %r" % self.queue_state)
+        for name in (
+            "budget_reason",
+            "ecosystem_target",
+            "relation_kind",
+            "relation_field",
+            "relation_raw_signal_id",
+        ):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError("%s must be a non-empty string or None" % name)
+        if self.relation_kind is not None and self.relation_kind not in GITHUB_RELATION_KINDS:
+            raise ValueError("invalid relation_kind: %r" % self.relation_kind)
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                github_candidate_selection_entity_id(
+                    self.discovery_run_id, self.candidate_id
+                ),
+            )
+        _normalize_datetimes(self, ("created_at",))
