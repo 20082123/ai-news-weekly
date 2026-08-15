@@ -284,6 +284,45 @@ re-runs idempotent).
   updates the existing Inbox file in place, refreshing `target_id` to the new
   pack id while preserving the six human feedback fields.
 
+## Phase 2C1: `candidate`, `candidate_discovery`, `candidate_assessment`
+
+Migration `0004_candidate_qualification.sql` (rewritten for v2) adds three
+tables (purely additive; 0001-0003 are immutable).
+
+### `candidate` - stable global identity
+
+One row per `(source, canonical_key)` (`UNIQUE`). `source` is CHECK-constrained
+to `github`. The row carries `title`, `url`, `first_seen_at`, `last_seen_at`
+(no week/scope/lane/raw_signal_id - those are discovery-level). Re-runs are
+monotonic: `first_seen_at` becomes the historical minimum observation time,
+`last_seen_at` the historical maximum (never moving backward), and an older
+snapshot never overwrites a newer `title`/`url`.
+
+### `candidate_discovery` - provenance
+
+One deterministic row per `(candidate_id, week_key, scope_key, lane,
+raw_signal_id)` (`UNIQUE`). `lane` is CHECK-constrained to `watchlist |
+mature | emerging | ecosystem`. A new snapshot (different `raw_signal_id`)
+in the same context forms a new discovery; the shared Candidate identity
+never changes. `FK candidate_id -> candidate(id)`,
+`FK raw_signal_id -> raw_signal(id)`.
+
+### `candidate_assessment` - deterministic decision revision
+
+One row per `(candidate_discovery_id, input_hash, policy_version)`
+(`UNIQUE`). `input_hash = SHA-256(canonical JSON(whitelist attributes))`,
+`decision` CHECK `research | watch | reject`, `trigger_kind` fixed to
+`repository_snapshot`. `attributes` carry only reviewed whitelist fields
+(plus `homepage_present: true|false`, never the homepage URL itself) -
+never the raw payload, never credentials, never quarantined content.
+`policy_version` is `candidate-gate-v2`.
+
+### Relationship to the legacy tables
+
+A candidate is neither a `signal`, an `event` nor a `material_pack`: the
+qualification path writes only these three tables. The 2B `materialize` flow
+remains as a legacy compatibility path.
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes

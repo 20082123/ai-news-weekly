@@ -304,6 +304,77 @@ packaging data flow stay exactly as in 2B2.
   shown in the Markdown. Angle C keeps heat explicitly unmeasured (single
   snapshot, no trend claims).
 
+## Phase 2C: Candidate System
+
+Phase 2C = Candidate System. The 2B path made a repository directly an Event
+and then an A-F materialPack; 2C1 corrects the pipeline shape - **Repository
+!= Event**, **search result != Candidate**, **Candidate != Material** - with a
+new recommended path::
+
+    Discovery (GitHub Search -> RawSignal)
+      -> Candidate Qualification (research | watch | reject)
+      -> Research (read README / releases)
+      -> Editorial Decision (future phase)
+      -> Content Pack (future phase)
+
+### 2C1 (current)
+
+* **Stable Candidate identity** - one row per `(source, canonical_key)`
+  (`UNIQUE(source, canonical_key)`); the same repository across any week,
+  scope or lane is exactly one Candidate. The identity carries no week/scope/
+  lane - those live in discovery rows.
+* **Discovery provenance** - `candidate_discovery` records each
+  `(candidate, week, scope, lane, raw_signal)` context; different
+  lanes/scopes/weeks produce different discoveries sharing one Candidate. A
+  new snapshot in the same context forms a new discovery (raw_signal_id
+  differs); an older snapshot replayed after a newer one never regresses
+  `last_seen_at` / `title` / `url`.
+* **Lane-aware qualification** (policy `candidate-gate-v2`, transparent integer
+  constants, no composite float score):
+  - common safety/junk filters: fork/archived/disabled/is_template/missing
+    description/unsafe identity URL/prompt-injection -> reject;
+  - `watchlist`: substantive description + push within 45 days -> research;
+  - `mature`: substantive + agent relevance + stars>=100 + push within 45
+    days -> research;
+  - `emerging`: substantive + agent relevance + created within 180 days +
+    push within 45 days -> research (no minimum stars; 1-star adhd-one-like
+    qualifies);
+  - `ecosystem`: metadata-only -> watch with `missing_ecosystem_relation`
+    (2C2 Discovery Policy will provide monitored core projects);
+  - `stars > 0` is no longer a generic research condition; a bare "ai" is not
+    an agent-relevance match.
+* **Homepage safety** - homepage is untrusted user metadata: it never gates
+  RESEARCH, an unsafe homepage never rejects the candidate, and no homepage URL
+  is stored or rendered - only `homepage_present: true|false` plus a reason
+  code. The repository identity URL must still be safe github.com HTTPS.
+* **Optional debug Markdown** - by default qualification writes only SQLite;
+  only `--emit-candidate-markdown --output-root --allow-output-write`
+  produces Chinese debug cards under `Candidates/Research/` (RESEARCH only;
+  WATCH/REJECT stay database-only; `Candidates/Watch/` is never created).
+* **Three decision vocabularies kept strictly separate**: Qualification
+  (research|watch|reject), future Editorial Publishability
+  (ready_to_write|needs_testing|watch|reject), human feedback
+  (adopted|parked|rejected). Only the first is implemented.
+
+### 2C2 (not yet implemented)
+
+* Real Discovery Policy (Watchlist/Mature/Emerging/Ecosystem query
+  strategies, larger recall pool, research budget).
+* Monitored core projects and relation evidence for ecosystem lane.
+* Currently absent: `--lane` is only a discovery-source label and Gate
+  strategy selector.
+
+### What 2C1 does NOT solve
+
+* It does not improve upstream GitHub Search randomness.
+* It does not solve material quality - only object identity and
+  qualification-gate boundaries.
+* Candidate Markdown is optional debug output, not a material Inbox; the Inbox
+  will receive Editorial Results after Research in a future phase.
+
+The existing `materialize github` / A-F flow remains as the Phase 2B legacy
+compatibility path - not deleted, not the recommended entry point.
+
 ### What is deliberately not in 2A
 
 * Network collection and a real GitHub HTTP client.

@@ -33,6 +33,9 @@ _EXPECTED_TABLES = (
     "source_run",
     "source_cursor",
     "raw_signal_observation",
+    "candidate",
+    "candidate_discovery",
+    "candidate_assessment",
 )
 
 
@@ -242,9 +245,10 @@ class MigrationsTest(unittest.TestCase):
         finally:
             S._MIGRATIONS_DIR = original
 
-        # Re-initialize with the real migrations: 0003 applies and backfills.
+        # Re-initialize with the real migrations: 0003 applies and backfills
+        # (later migrations apply too; the backfill is what is under test).
         status = S.initialize_database(self.db)
-        self.assertEqual(status["latest_applied"], 3)
+        self.assertGreaterEqual(status["latest_applied"], 3)
         conn = S._open(self.db)
         try:
             count = conn.execute("SELECT COUNT(*) FROM raw_signal_observation").fetchone()[0]
@@ -256,6 +260,44 @@ class MigrationsTest(unittest.TestCase):
             self.assertEqual(row["observed_at"], ts)
         finally:
             conn.close()
+
+    def test_migration_0004_applies_on_fresh_and_upgrade(self):
+        # Fresh database: all four migrations apply in order.
+        status = S.initialize_database(self.db)
+        self.assertEqual(status["latest_applied"], 4)
+        with S.connect(self.db) as conn:
+            names = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+        self.assertIn("candidate", names)
+        self.assertIn("candidate_discovery", names)
+        self.assertIn("candidate_assessment", names)
+
+        # Upgrade path: a database frozen at 0003 upgrades cleanly to 0004.
+        old_dir = pathlib.Path(self.tmp) / "old3"
+        old_dir.mkdir()
+        real_dir = pathlib.Path(S._MIGRATIONS_DIR)
+        for name in (
+            "0001_initial.sql",
+            "0002_source_collection.sql",
+            "0003_raw_signal_observation.sql",
+        ):
+            shutil.copy2(real_dir / name, old_dir)
+        db2 = os.path.join(self.tmp, "upgrade.db")
+        original = S._MIGRATIONS_DIR
+        S._MIGRATIONS_DIR = old_dir
+        try:
+            S.initialize_database(db2)
+        finally:
+            S._MIGRATIONS_DIR = original
+        status2 = S.initialize_database(db2)
+        self.assertEqual(status2["latest_applied"], 4)
+        # Repeated initialization stays idempotent.
+        S.initialize_database(db2)
+        with S.connect(db2) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM schema_migration").fetchone()[0]
+        self.assertEqual(count, 4)
 
     def test_temp_directory_cleanup_pattern(self):
         tmp = tempfile.mkdtemp(prefix="ai_signal_tmp_")

@@ -96,6 +96,13 @@ ALLOWED_FIELDS: Tuple[str, ...] = (
     "topics",
     "pushed_at",
     "updated_at",
+    # Phase 2C1: qualification gate inputs collected from the real snapshot.
+    "created_at",
+    "homepage",
+    "fork",
+    "archived",
+    "disabled",
+    "is_template",
 )
 
 # Fields that must be present (and valid) for an item to be accepted.
@@ -141,6 +148,10 @@ def _is_int(value: Any) -> bool:
 
 def _is_optional_str(value: Any) -> bool:
     return value is None or isinstance(value, str)
+
+
+def _is_optional_bool(value: Any) -> bool:
+    return value is None or isinstance(value, bool)
 
 
 def _is_safe_https_url(value: Any) -> bool:
@@ -278,6 +289,16 @@ class GitHubSource(Source):
             ("stargazers_count", _is_int),
             ("forks_count", _is_int),
             ("pushed_at", _is_optional_str),
+            # Phase 2C1 qualification inputs. homepage stays untrusted
+            # metadata (validation happens downstream); booleans must be
+            # real bools, strings/null only - any other type rejects the item
+            # through the existing malformed-item path.
+            ("created_at", _is_optional_str),
+            ("homepage", _is_optional_str),
+            ("fork", _is_optional_bool),
+            ("archived", _is_optional_bool),
+            ("disabled", _is_optional_bool),
+            ("is_template", _is_optional_bool),
         )
         for field_name, ok in optional_specs:
             if field_name in raw:

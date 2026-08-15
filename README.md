@@ -306,3 +306,52 @@ PYTHONPATH=src python -m ai_signal feedback sync \
   不生成「爆火、快速增长、行业领先」等单次快照无法证明的结论。
 - 仓库名、URL、编程语言与原始 topics 不做翻译；正文展示的项目信息全部来自已采集
   payload，不自行编造。
+
+### 第二阶段 2C1：Candidate Qualification（候选资格判定）
+
+2C1 建立新的推荐路径：**Repository ≠ Event、Search result ≠ Candidate、
+Candidate ≠ Material**。本阶段只解决对象身份和资格判定边界，不改善上游
+GitHub Search 的随机性，也不宣称已解决素材质量问题。
+
+```
+Discovery（GitHub Search 采集）
+→ Candidate Qualification（research | watch | reject）
+→ Research（人工/后续阅读 README、Release）
+→ Editorial Decision（未来阶段）
+→ Content Pack（未来阶段）
+```
+
+- 判定只回答一个问题："这个候选是否值得继续花成本读取 README、Release 等资料？"
+  不生成 A–F 素材包，不使用含义不明的综合分数（如 0.75），所有判断由稳定
+  reason codes 与固定 missing-evidence 清单解释。
+- 仅凭 GitHub Search 元数据，任何候选都不可能被判为可发布（`ready_to_write` /
+  `needs_testing` 属于未来 Editorial Decision，不属于本阶段）。
+- **三层身份模型**：`candidate`（稳定全局身份，`UNIQUE(source, canonical_key)`，
+  同一仓库跨周/跨 scope/跨 lane 永远只有一个）；`candidate_discovery`（每次
+  发现上下文：week/scope/lane/snapshot，不同 lane/scope/week 产生不同 Discovery
+  但共享 Candidate）；`candidate_assessment`（由
+  `(discovery_id, input_hash, policy_version)` 确定性生成的判定，输入变化产生新
+  revision，历史保留审计）。
+- **Lane-aware Gate**（政策版本 `candidate-gate-v2`，透明常量，无浮点综合分）：
+  - `watchlist`：实质描述 + 近 45 天推送 → research
+  - `mature`：实质描述 + Agent 相关性 + stars≥100 + 近 45 天推送 → research
+  - `emerging`：实质描述 + Agent 相关性 + 创建≤180 天 + 近 45 天推送 → research（不要求最低 stars）
+  - `ecosystem`：metadata-only 当前最多 watch，`reason_codes` 含 `missing_ecosystem_relation`
+- `--lane` 当前只是发现来源标签及 Gate 策略选择，尚非完整 Discovery Policy。
+- **homepage 安全策略**：homepage 是用户填写的不可信元数据，不参与 RESEARCH Gate，
+  不安全 homepage 不导致 REJECT，URL 不写入 attributes/Markdown，只保留
+  `homepage_present: true|false` + reason code。
+- **默认 DB-only**：正常命令只写 SQLite，不需要 `--output-root`；
+  仅在同时提供 `--emit-candidate-markdown --output-root --allow-output-write`
+  时输出调试候选卡，且只给 RESEARCH 生成，WATCH/REJECT 默认只进数据库。
+  Candidate Card 明确是调试/研究队列，不是素材 Inbox。
+- 现有 `materialize github` 与 A–F 流程保留为 Phase 2B legacy 兼容路径，不删除、
+  不作为新流程推荐入口。
+
+```bash
+PYTHONPATH=src python -m ai_signal candidate qualify-github   --db-path ./.ai-signal/ai_signal.db   --week-key 2026-W33   --scope-key emerging-ai-agent-v1   --lane emerging   --limit 50   --output-root ./.ai-signal   --allow-output-write
+```
+
+- 缺少 `--allow-output-write` 时返回退出码 `4`：不创建/迁移数据库、不写 Markdown。
+- CLI 输出仅含安全计数（processed/candidates_created/candidates_updated/
+  assessments_created/research/watch/rejected/quarantined/markdown_written）。

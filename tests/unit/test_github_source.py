@@ -42,6 +42,12 @@ def _good_item(item_id=101, **overrides):
         "topics": ["example"],
         "pushed_at": "2026-08-01T00:00:00+00:00",
         "updated_at": "2026-08-02T00:00:00+00:00",
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "homepage": None,
+        "fork": False,
+        "archived": False,
+        "disabled": False,
+        "is_template": False,
     }
     item.update(overrides)
     return item
@@ -83,8 +89,55 @@ class GitHubSourceParseTest(unittest.TestCase):
             "topics",
             "pushed_at",
             "updated_at",
+            "created_at",
+            "homepage",
+            "fork",
+            "archived",
+            "disabled",
+            "is_template",
         ):
             self.assertIn(key, payload)
+
+    def test_qualification_fields_collected(self):
+        # The gate inputs survive the whitelist and land in the payload.
+        raw = _good_item(
+            101,
+            fork=True,
+            archived=False,
+            disabled=False,
+            is_template=True,
+            created_at="2026-05-01T00:00:00+00:00",
+            homepage="https://external.example.org/",
+        )
+        page = GitHubPage(items=(raw,), next_cursor=None, source_version="fake-1", fetched_at=FETCHED_AT)
+        batch = GitHubSource(_FakeClient(page=page)).collect(None, {})
+        self.assertEqual(batch.status, "success")
+        payload = batch.items[0].payload
+        self.assertTrue(payload["fork"])
+        self.assertFalse(payload["archived"])
+        self.assertTrue(payload["is_template"])
+        self.assertEqual(payload["created_at"], "2026-05-01T00:00:00+00:00")
+        self.assertEqual(payload["homepage"], "https://external.example.org/")
+
+    def test_non_bool_flag_rejects_item(self):
+        for key in ("fork", "archived", "disabled", "is_template"):
+            with self.subTest(key=key):
+                raw = _good_item(101, **{key: "yes"})
+                page = GitHubPage(items=(raw,), next_cursor=None, source_version="fake-1", fetched_at=FETCHED_AT)
+                batch = GitHubSource(_FakeClient(page=page)).collect(None, {})
+                self.assertEqual(batch.status, "partial")
+
+    def test_non_string_homepage_rejects_item(self):
+        raw = _good_item(101, homepage=42)
+        page = GitHubPage(items=(raw,), next_cursor=None, source_version="fake-1", fetched_at=FETCHED_AT)
+        batch = GitHubSource(_FakeClient(page=page)).collect(None, {})
+        self.assertEqual(batch.status, "partial")
+
+    def test_non_string_created_at_rejects_item(self):
+        raw = _good_item(101, created_at=12345)
+        page = GitHubPage(items=(raw,), next_cursor=None, source_version="fake-1", fetched_at=FETCHED_AT)
+        batch = GitHubSource(_FakeClient(page=page)).collect(None, {})
+        self.assertEqual(batch.status, "partial")
 
     def test_malformed_item_makes_batch_partial(self):
         bad = {"id": 999}  # missing required fields

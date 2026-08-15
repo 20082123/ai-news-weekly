@@ -857,3 +857,188 @@ class SourceCursor:
         if not isinstance(self.cursor, str) or not self.cursor.strip():
             raise ValueError("cursor must be a non-empty string")
         _normalize_datetimes(self, ("updated_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Candidate qualification (phase 2C1, identity v2)
+# --------------------------------------------------------------------------- #
+# Three layers:
+#   Candidate          - stable identity: "who this object is"
+#   CandidateDiscovery - provenance: one (week, scope, lane, snapshot) context
+#   CandidateAssessment - deterministic decision per discovery
+# A Candidate is deliberately NOT an Event and never becomes a MaterialPack.
+CANDIDATE_LANES = ("watchlist", "mature", "emerging", "ecosystem")
+CANDIDATE_DECISIONS = ("research", "watch", "reject")
+CANDIDATE_TRIGGER_KINDS = ("repository_snapshot",)
+
+
+def candidate_entity_id(source: str, canonical_key: str) -> str:
+    """Stable global identity: same source + canonical_key -> same id."""
+    return deterministic_id("candidate-v2", source, canonical_key)
+
+
+def candidate_discovery_entity_id(
+    candidate_id: str,
+    week_key: str,
+    scope_key: str,
+    lane: str,
+    raw_signal_id: str,
+) -> str:
+    return deterministic_id(
+        "candidate-discovery-v2",
+        candidate_id, week_key, scope_key, lane, raw_signal_id,
+    )
+
+
+def candidate_assessment_entity_id(
+    candidate_discovery_id: str, input_hash: str, policy_version: str
+) -> str:
+    return deterministic_id(
+        "candidate-assessment-v2", candidate_discovery_id, input_hash, policy_version
+    )
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A stable global candidate identity (one row per source object).
+
+    The id depends only on ``(source, canonical_key)``: the same repository
+    across any week, scope or lane is exactly one Candidate. Discovery
+    contexts live in :class:`CandidateDiscovery`.
+    """
+
+    source: str
+    canonical_key: str
+    title: str
+    url: str
+    first_seen_at: datetime
+    last_seen_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        for name in ("canonical_key", "title"):
+            if not str(getattr(self, name)).strip():
+                raise ValueError("%s must not be empty" % name)
+        if self.source != "github":
+            raise ValueError("source must be github")
+        if not isinstance(self.url, str) or not self.url.startswith("https://"):
+            raise ValueError("url must be pre-validated https")
+        if self.last_seen_at is None:
+            object.__setattr__(self, "last_seen_at", self.first_seen_at)
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", self.first_seen_at)
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.first_seen_at)
+        if self.id == "":
+            object.__setattr__(
+                self, "id", candidate_entity_id(self.source, self.canonical_key)
+            )
+        _normalize_datetimes(
+            self, ("first_seen_at", "last_seen_at", "created_at", "updated_at")
+        )
+        if self.first_seen_at > self.last_seen_at:
+            raise ValueError("first_seen_at must not be later than last_seen_at")
+
+
+@dataclass(frozen=True)
+class CandidateDiscovery:
+    """One discovery context of a Candidate: (week, scope, lane, snapshot).
+
+    The same repository discovered in different lanes, scopes or weeks
+    produces different Discovery rows that share the same Candidate. The id
+    is deterministic over the full context including ``raw_signal_id``, so a
+    new snapshot in the same context forms a new Discovery.
+    """
+
+    candidate_id: str
+    week_key: str
+    scope_key: str
+    lane: str
+    raw_signal_id: str
+    observed_at: datetime
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.candidate_id:
+            raise ValueError("candidate_id must not be empty")
+        if not str(self.week_key).strip():
+            raise ValueError("week_key must not be empty")
+        object.__setattr__(self, "scope_key", validate_scope_key(self.scope_key))
+        if self.lane not in CANDIDATE_LANES:
+            raise ValueError("invalid lane: %r" % self.lane)
+        if not self.raw_signal_id:
+            raise ValueError("raw_signal_id must not be empty")
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", self.observed_at)
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                candidate_discovery_entity_id(
+                    self.candidate_id, self.week_key, self.scope_key,
+                    self.lane, self.raw_signal_id,
+                ),
+            )
+        _normalize_datetimes(self, ("observed_at", "created_at"))
+
+
+@dataclass(frozen=True)
+class CandidateAssessment:
+    """One deterministic qualification decision for a CandidateDiscovery.
+
+    The id is derived from ``(candidate_discovery_id, input_hash,
+    policy_version)``, so re-running on identical input is idempotent while a
+    changed snapshot (new ``input_hash``) yields a new assessment revision
+    kept for audit.
+    """
+
+    candidate_discovery_id: str
+    policy_version: str
+    input_hash: str
+    decision: str
+    trigger_kind: str
+    trigger_summary: str
+    reason_codes: Tuple[str, ...]
+    missing_evidence: Tuple[str, ...]
+    attributes: Mapping[str, Any] = field(default_factory=dict)
+    assessed_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.candidate_discovery_id or not self.policy_version or not self.input_hash:
+            raise ValueError(
+                "candidate_discovery_id, policy_version and input_hash must not be empty"
+            )
+        if not isinstance(self.input_hash, str) or len(self.input_hash) != 64:
+            raise ValueError("input_hash must be a 64-character hex string")
+        try:
+            int(self.input_hash, 16)
+        except ValueError as exc:
+            raise ValueError("input_hash must be a hex string") from exc
+        if self.decision not in CANDIDATE_DECISIONS:
+            raise ValueError("invalid decision: %r" % self.decision)
+        if self.trigger_kind not in CANDIDATE_TRIGGER_KINDS:
+            raise ValueError("invalid trigger_kind: %r" % self.trigger_kind)
+        if not isinstance(self.trigger_summary, str) or not self.trigger_summary.strip():
+            raise ValueError("trigger_summary must not be empty")
+        object.__setattr__(self, "reason_codes", as_tuple(self.reason_codes))
+        object.__setattr__(self, "missing_evidence", as_tuple(self.missing_evidence))
+        if not all(isinstance(code, str) for code in self.reason_codes):
+            raise TypeError("reason_codes must contain strings")
+        if not all(isinstance(item, str) for item in self.missing_evidence):
+            raise TypeError("missing_evidence must contain strings")
+        object.__setattr__(self, "attributes", validate_payload(self.attributes))
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                candidate_assessment_entity_id(
+                    self.candidate_discovery_id, self.input_hash, self.policy_version
+                ),
+            )
+        if self.assessed_at is None:
+            object.__setattr__(self, "assessed_at", now_utc())
+        _normalize_datetimes(self, ("assessed_at",))

@@ -149,6 +149,35 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required gate to write feedback rows",
     )
+
+    # candidate --------------------------------------------------------------
+    p_cand = sub.add_parser(
+        "candidate", help="candidate qualification (research / watch / reject)"
+    )
+    cand_sub = p_cand.add_subparsers(dest="candidate_command", required=True)
+    p_cq = cand_sub.add_parser(
+        "qualify-github", help="qualify GitHub candidates from collected snapshots"
+    )
+    p_cq.add_argument("--db-path", dest="db_path", required=True)
+    p_cq.add_argument("--week-key", dest="week_key", required=True)
+    p_cq.add_argument("--scope-key", dest="scope_key", required=True)
+    p_cq.add_argument(
+        "--lane", required=True, help="watchlist | mature | emerging | ecosystem"
+    )
+    p_cq.add_argument("--limit", type=int, default=50)
+    p_cq.add_argument(
+        "--emit-candidate-markdown",
+        dest="emit_candidate_markdown",
+        action="store_true",
+        help="optional debug output: only RESEARCH candidates render a card",
+    )
+    p_cq.add_argument("--output-root", dest="output_root")
+    p_cq.add_argument(
+        "--allow-output-write",
+        dest="allow_output_write",
+        action="store_true",
+        help="required (with --emit-candidate-markdown) to write debug cards",
+    )
     return parser
 
 
@@ -556,6 +585,106 @@ def cmd_feedback_sync(args, out) -> int:
     return EXIT_OK
 
 
+def cmd_candidate_qualify_github(args, out) -> int:
+    from .pipeline.qualify import QualifyError, qualify_github
+    from .storage import sqlite as sqlite_storage
+
+    if not _WEEK_KEY_RE.match(args.week_key):
+        out.write("invalid week key: expected YYYY-Www\n")
+        return EXIT_CONFIG_ERROR
+    try:
+        validate_scope_key(args.scope_key)
+    except (TypeError, ValueError):
+        out.write("invalid scope key\n")
+        return EXIT_CONFIG_ERROR
+    if args.lane not in ("watchlist", "mature", "emerging", "ecosystem"):
+        out.write("invalid lane\n")
+        return EXIT_CONFIG_ERROR
+    if not isinstance(args.limit, int) or isinstance(args.limit, bool) or not 1 <= args.limit <= 100:
+        out.write("invalid limit\n")
+        return EXIT_CONFIG_ERROR
+
+    # Optional debug Markdown requires all three flags together. Validation
+    # happens BEFORE any database work so a bad invocation has no side effects.
+    emit_markdown = bool(args.emit_candidate_markdown)
+    if emit_markdown and not args.output_root:
+        out.write("config error: --output-root is required with --emit-candidate-markdown\n")
+        return EXIT_CONFIG_ERROR
+    if emit_markdown and not args.allow_output_write:
+        out.write("output write not allowed: --allow-output-write is required\n")
+        return EXIT_SECURITY
+
+    try:
+        sqlite_storage.initialize_database(args.db_path)
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+
+    # Phase 1: qualification + candidates + discoveries + assessments in one
+    # transaction. Default runs are DB-only.
+    conn = sqlite_storage._open(args.db_path)
+    try:
+        conn.execute("BEGIN")
+        result = qualify_github(
+            conn, args.week_key, args.scope_key, args.lane, args.limit
+        )
+        conn.execute("COMMIT")
+    except sqlite_storage.StorageError:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        conn.close()
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    except QualifyError as exc:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        conn.close()
+        out.write("config error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
+    conn.close()
+
+    # Phase 2: optional debug Markdown after the DB commit; only RESEARCH
+    # candidates render, one failure keeps the committed candidate and does
+    # not block the remaining cards.
+    markdown_written = 0
+    output_failed = False
+    if emit_markdown:
+        from pathlib import Path
+
+        from .outputs.candidate_markdown import (
+            CandidateMarkdownError,
+            publish_candidate_markdown,
+        )
+
+        for qc in result.qualified:
+            try:
+                publish_candidate_markdown(Path(args.output_root), qc)
+                markdown_written += 1
+            except CandidateMarkdownError:
+                output_failed = True
+
+    out.write("processed: %d\n" % result.processed)
+    out.write("candidates_created: %d\n" % result.candidates_created)
+    out.write("candidates_updated: %d\n" % result.candidates_updated)
+    out.write("discoveries_created: %d\n" % result.discoveries_created)
+    out.write("discoveries_existing: %d\n" % result.discoveries_existing)
+    out.write("assessments_created: %d\n" % result.assessments_created)
+    out.write("research: %d\n" % result.research)
+    out.write("watch: %d\n" % result.watch)
+    out.write("rejected: %d\n" % result.rejected)
+    out.write("quarantined: %d\n" % result.quarantined)
+    out.write("markdown_written: %d\n" % markdown_written)
+
+    if output_failed:
+        out.write("output error\n")
+        return EXIT_CAPABILITY
+    return EXIT_OK
+
+
 def main(argv: Optional[list] = None, out=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -577,6 +706,8 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_materialize_github(args, stream)
     if args.command == "feedback" and args.feedback_command == "sync":
         return cmd_feedback_sync(args, stream)
+    if args.command == "candidate" and args.candidate_command == "qualify-github":
+        return cmd_candidate_qualify_github(args, stream)
 
     parser.print_help(stream)
     return EXIT_OK

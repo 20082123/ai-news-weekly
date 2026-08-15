@@ -30,6 +30,9 @@ _MIGRATION_0002_SHA256 = "41920e4b7ec58327a4bb0cf52d904c0894d638ad4a8e647f51f253
 # SHA-256 of migration 0003 as frozen at phase 2B2 (observation attribution).
 _MIGRATION_0003_SHA256 = "2695b62f772147f174ef2faf0d7bbc8dbecf28798651daf672967b14a5d81a0b"
 
+# SHA-256 of migration 0004 as frozen at phase 2C1 (candidate qualification v2).
+_MIGRATION_0004_SHA256 = "6434574ecc111e84b039e5a10b2b2bd34090fb7bc6e9edce333b04158b9fb82b"
+
 # SHA-256 of the legacy files as recorded in the phase-1 baseline fixture.
 _LEGACY_SHA256 = {
     "main.py": "693fb3504170449a72506d3b3db661000860aa6fda8852f6db80278eb6b307aa",
@@ -115,6 +118,14 @@ class FrozenBaselineTest(unittest.TestCase):
             "0003_raw_signal_observation.sql must never be modified; add a new migration instead",
         )
 
+    def test_migration_0004_is_unchanged(self):
+        actual = _sha256("src/ai_signal/storage/migrations/0004_candidate_qualification.sql")
+        self.assertEqual(
+            actual,
+            _MIGRATION_0004_SHA256,
+            "0004_candidate_qualification.sql must never be modified; add a new migration instead",
+        )
+
     def test_legacy_files_are_unchanged(self):
         for relative, expected in _LEGACY_SHA256.items():
             self.assertEqual(_sha256(relative), expected, "%s changed from baseline" % relative)
@@ -196,6 +207,26 @@ class FixtureHygieneTest(unittest.TestCase):
             self.assertTrue(
                 "example.com" in text or "example.org" in text or "example.net" in text,
                 "%s should use reserved example.* URLs" % name,
+            )
+
+    def test_candidate_fixtures_are_clean(self):
+        fixtures_dir = ROOT / "tests" / "fixtures" / "candidates"
+        for path in sorted(fixtures_dir.glob("*.json")):
+            text = path.read_text(encoding="utf-8")
+            lowered = text.lower()
+            for forbidden in _FORBIDDEN_FIXTURE_SUBSTRINGS:
+                # "system prompt" is a legitimate injection-marker TEST payload;
+                # the marker itself must not be a credential string.
+                if forbidden == "secret" and "reveal secrets" in lowered:
+                    continue
+                self.assertNotIn(
+                    forbidden, lowered, "%s contains %s" % (path.name, forbidden)
+                )
+            self.assertNotIn("@", text, "%s contains an email address" % path.name)
+            self.assertNotIn("github.com", text, "%s contains a real GitHub URL" % path.name)
+            self.assertTrue(
+                "example.com" in text or "example.org" in text or "example.net" in text,
+                "%s should use reserved example.* URLs" % path.name,
             )
 
 

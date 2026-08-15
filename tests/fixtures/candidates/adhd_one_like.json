@@ -1,0 +1,22 @@
+{
+  "comment": "adhd-one-like regression sample: 1 star, 0 forks, not fork/archived/template/disabled, substantive Windows Desktop + AI Harness description, topics present, README/Release content absent from metadata.",
+  "payload": {
+    "id": 90001,
+    "full_name": "example-org/adhd-one-like",
+    "html_url": "https://example.com/example-org/adhd-one-like",
+    "description": "A Windows desktop application that integrates multiple AI models as a personal harness for focus and task management.",
+    "topics": ["windows", "desktop", "ai-harness", "productivity"],
+    "language": "C#",
+    "stargazers_count": 1,
+    "forks_count": 0,
+    "created_at": "2026-06-01T00:00:00+00:00",
+    "updated_at": "2026-08-10T00:00:00+00:00",
+    "pushed_at": "2026-08-10T00:00:00+00:00",
+    "homepage": null,
+    "fork": false,
+    "archived": false,
+    "disabled": false,
+    "is_template": false
+  },
+  "expect_decision": "research"
+}
