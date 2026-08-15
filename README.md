@@ -496,3 +496,17 @@ python -m ai_signal event-candidate add --db-path ./.ai-signal/ai_signal.db `
 
 python -m ai_signal event-candidate list --db-path ./.ai-signal/ai_signal.db
 ```
+
+2C3-B 打通了 GitHub 研究队列：把一周内 `queued` 的候选自动提升为
+EventCandidate **机器草案**（默认 `tool_workflow_change`、受众/影响占位、
+完整缺证据清单、优先级 50），并挂 `github_repository_candidate` 引用；已被
+引用的候选（如 Golden Set 手动种子）自动跳过，重复运行零副作用：
+
+```powershell
+python -m ai_signal event-candidate promote-github `
+  --db-path ./.ai-signal/ai_signal.db --week-key 2026-W33
+```
+
+人工研究时只需把草案的 signal_type / change_summary / 受众 / 影响 / 优先级
+改成真实判断（旧草案行保留为审计历史）。`official_announcement_candidate`
+引用类型已预留（2D3 接入官方公告 Adapter）。

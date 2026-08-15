@@ -167,6 +167,22 @@ class EventCandidateSourceRefRepository:
         ).fetchone()
         return self._from_row(row) if row else None
 
+    def exists_by_ref(self, source_kind: str, ref_id: str) -> bool:
+        """True when any event candidate already references this source row.
+
+        Used by the 2C3-B promotion to skip queued candidates that have
+        already been promoted (or were recorded manually, e.g. Golden Set
+        seeds), so one source candidate never produces duplicate drafts.
+        """
+        row = _safe_execute(
+            self.conn,
+            "SELECT 1 FROM event_candidate_source_ref "
+            "WHERE source_kind = ? AND ref_id = ? LIMIT 1",
+            (source_kind, ref_id),
+            "event candidate source ref exists",
+        ).fetchone()
+        return row is not None
+
     def list_for_candidate(self, event_candidate_id: str) -> List[EventCandidateSourceRef]:
         rows = _safe_execute(
             self.conn,

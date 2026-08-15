@@ -87,6 +87,101 @@ class EventCandidateCliTest(unittest.TestCase):
         self.assertEqual(code, EXIT_DB_ERROR)
         self.assertIn("database does not exist", text)
 
+    def _seed_queued_chain(self, db, week="2026-W33"):
+        from ai_signal.storage import sqlite as S
+
+        S.initialize_database(db)
+        ts = "2026-08-15T08:00:00+00:00"
+        conn = S._open(db)
+        conn.execute("BEGIN")
+        conn.execute(
+            "INSERT INTO github_discovery_run (id, policy_id, policy_hash, "
+            "week_key, lane, candidate_limit, research_budget, status, "
+            "started_at, finished_at, warnings, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("gdr-0", "test-v1", "a" * 64, week, "emerging", 50, 5, "success",
+             ts, ts, "[]", ts),
+        )
+        conn.execute(
+            "INSERT INTO collection_run (id, week_key, started_at, status, "
+            "config_snapshot, created_at) VALUES (?,?,?,?,?,?)",
+            ("cr-0", week, ts, "success", "{}", ts),
+        )
+        conn.execute(
+            "INSERT INTO raw_signal (id, collection_run_id, source, external_id, "
+            "payload, payload_sha256, source_version, collected_at, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("raw-0", "cr-0", "github", "90000", "{}", "e" * 64,
+             "github-rest-v1", ts, ts),
+        )
+        conn.execute(
+            "INSERT INTO candidate (id, source, canonical_key, title, url, "
+            "first_seen_at, last_seen_at, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("cand-0", "github", "github:repository:90000",
+             "example-org/repo-0", "https://github.com/example-org/repo-0",
+             ts, ts, ts, ts),
+        )
+        conn.execute(
+            "INSERT INTO candidate_discovery (id, candidate_id, week_key, "
+            "scope_key, lane, raw_signal_id, observed_at, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("disc-0", "cand-0", week, "ghp-t-v1-q1", "emerging", "raw-0", ts, ts),
+        )
+        conn.execute(
+            "INSERT INTO candidate_assessment (id, candidate_discovery_id, "
+            "policy_version, input_hash, decision, trigger_kind, trigger_summary, "
+            "reason_codes, missing_evidence, attributes, assessed_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("assess-0", "disc-0", "candidate-gate-v2", "f" * 64, "research",
+             "repository_snapshot", "summary", "[]", "[]", "{}", ts),
+        )
+        conn.execute(
+            "INSERT INTO github_candidate_selection (id, discovery_run_id, "
+            "candidate_id, winning_discovery_id, winning_assessment_id, "
+            "selection_rank, qualification_decision, queue_state, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("sel-0", "gdr-0", "cand-0", "disc-0", "assess-0", 0, "research",
+             "queued", ts),
+        )
+        conn.execute("COMMIT")
+        conn.close()
+
+    def test_promote_invalid_week(self):
+        code, text = self._run(
+            ["event-candidate", "promote-github", "--db-path", self.db,
+             "--week-key", "nope"]
+        )
+        self.assertEqual(code, EXIT_CONFIG_ERROR)
+        self.assertIn("invalid week key", text)
+
+    def test_promote_on_empty_db(self):
+        code, text = self._run(
+            ["event-candidate", "promote-github", "--db-path", self.db,
+             "--week-key", "2026-W33"]
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("processed: 0", text)
+        self.assertIn("promoted: 0", text)
+
+    def test_promote_happy_path_and_idempotent(self):
+        self._seed_queued_chain(self.db)
+        code, text = self._run(
+            ["event-candidate", "promote-github", "--db-path", self.db,
+             "--week-key", "2026-W33"]
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("promoted: 1", text)
+        self.assertIn("refs_added: 1", text)
+        # Idempotent rerun skips the referenced candidate.
+        code, text = self._run(
+            ["event-candidate", "promote-github", "--db-path", self.db,
+             "--week-key", "2026-W33"]
+        )
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("promoted: 0", text)
+        self.assertIn("already_promoted: 1", text)
+
 
 if __name__ == "__main__":
     unittest.main()

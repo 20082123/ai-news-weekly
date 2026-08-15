@@ -148,8 +148,10 @@ GitHub Search Result
   四个策略真实采集（13 请求）全 success，产出研究队列 20 条 queued；
 - **Golden Set 封版（有好有坏）**：`docs/golden-set/` 4 份档案 + 20 行候选表；
   GS-12 已记第一用户初判（不吸引 → reject）；
-- **2C3-A 进行中**：五类 Signal Taxonomy + `event_candidate`/
-  `event_candidate_source_ref`（0006）+ CLI；Golden 档案已种子入库；
+- **2C3-A 完成、2C3-B 完成**：五类 Signal Taxonomy + `event_candidate`/
+  `event_candidate_source_ref`（0006）+ CLI + GitHub 队列自动提升
+  （`event-candidate promote-github`）；Golden 档案与 2026-W33 队列（20 条
+  queued → 19 草案 + 1 跳过）已写入开发库；
 - **待第一用户**：Watchlist/Ecosystem 清单确认；后续受控 smoke 授权。
 
 Stage A 尚未完成：Golden Set 当前只有说明性种子，尚未完成 10～20 个真实样例的

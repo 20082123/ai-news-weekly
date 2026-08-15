@@ -246,6 +246,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_evc_list = evc_sub.add_parser("list", help="list event candidates (safe summary)")
     p_evc_list.add_argument("--db-path", dest="db_path", required=True)
     p_evc_list.add_argument("--signal-type", dest="signal_type")
+    p_evc_promo = evc_sub.add_parser(
+        "promote-github",
+        help="promote a week's queued GitHub candidates into event-candidate drafts",
+    )
+    p_evc_promo.add_argument("--db-path", dest="db_path", required=True)
+    p_evc_promo.add_argument("--week-key", dest="week_key", required=True)
     return parser
 
 
@@ -869,12 +875,47 @@ def cmd_event_candidate(args, out) -> int:
         EventCandidate,
         EventCandidateSourceRef,
     )
-    from .pipeline.event_candidate import record_event_candidate
+    from .pipeline.event_candidate import (
+        EventCandidateError,
+        promote_github_queue,
+        record_event_candidate,
+    )
     from .storage import sqlite as sqlite_storage
     from .storage.event_candidate_repositories import (
         EventCandidateRepository,
         EventCandidateSourceRefRepository,
     )
+
+    if args.event_candidate_command == "promote-github":
+        if not _WEEK_KEY_RE.match(args.week_key):
+            out.write("invalid week key: expected YYYY-Www\n")
+            return EXIT_CONFIG_ERROR
+        try:
+            sqlite_storage.initialize_database(args.db_path)
+            conn = sqlite_storage._open(args.db_path)
+            try:
+                conn.execute("BEGIN")
+                result = promote_github_queue(conn, args.week_key)
+                conn.execute("COMMIT")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+        except EventCandidateError as exc:
+            out.write("config error: %s\n" % exc)
+            return EXIT_CONFIG_ERROR
+        except sqlite_storage.StorageError:
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        out.write("processed: %d\n" % result.processed)
+        out.write("promoted: %d\n" % result.promoted)
+        out.write("already_promoted: %d\n" % result.already_promoted)
+        out.write("refs_added: %d\n" % result.refs_added)
+        return EXIT_OK
 
     if args.event_candidate_command == "list":
         if not Path(args.db_path).exists():
