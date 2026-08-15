@@ -465,3 +465,34 @@ python -m ai_signal discover github --status --db-path ./.ai-signal/ai_signal.db
 （含缺少 `--allow-network`），`partial` / `failed` 完成 `5`。CLI 输出只含安全
 计数（run_id/status/probes_*/processed/research/watch/rejected/quarantined/
 selections_total/queued/over_budget/beyond_candidate_limit）。
+
+### 第二阶段 2C3：Source-independent Event Candidate 契约（进行中）
+
+2C3 建立很薄的、与来源无关的候选契约（DEC-014），把 GitHub 候选与未来的官方
+公告候选聚合到同一个变化上：
+
+```text
+GitHubRepositoryCandidate / OfficialAnnouncementCandidate
+            ↓（引用，不复制）
+EventCandidate（五类全局 Signal Type + 受众 + 工作影响假设 + 缺证据 + 研究优先级）
+```
+
+- 五类全局 Signal Type：`capability_change` / `tool_workflow_change` /
+  `user_reality` / `economics_access` / `ecosystem_market_shift`（与 GitHub
+  Lane 无关，Lane 仍是 GitHub-specific）；
+- 新增迁移 0006：`event_candidate`（身份 = signal_type+subject+change_summary，
+  跨来源去重）+ `event_candidate_source_ref`（kind+ref_id+安全标签，无跨来源外键）；
+- 不确认事件、不复用 2B legacy `event` 表、不产素材；
+- Golden Set 的首批档案已作为 EventCandidate 种子写入开发库。
+
+CLI（DB-only）：
+
+```powershell
+python -m ai_signal event-candidate add --db-path ./.ai-signal/ai_signal.db `
+  --signal-type economics_access --subject "DeepSeek V4 API" `
+  --change-summary "峰谷计价生效" --audience "API 开发者" `
+  --impact "成本重算" --priority 90 `
+  --ref official_announcement_candidate:deepseek-news260813:V4-Pro GA 公告
+
+python -m ai_signal event-candidate list --db-path ./.ai-signal/ai_signal.db
+```

@@ -1281,3 +1281,140 @@ class GitHubCandidateSelection:
                 ),
             )
         _normalize_datetimes(self, ("created_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Event candidate (phase 2C3, source-independent)
+# --------------------------------------------------------------------------- #
+# The five global Signal Types are product-wide and source-agnostic. They are
+# deliberately NOT GitHub lanes; GitHub's watchlist/mature/emerging/ecosystem
+# remain GitHub-specific Discovery Lanes.
+SIGNAL_TYPES = (
+    "capability_change",
+    "tool_workflow_change",
+    "user_reality",
+    "economics_access",
+    "ecosystem_market_shift",
+)
+
+# Source-specific candidate kinds a reference may point at. Only the GitHub
+# repository candidate exists today; the official announcement candidate is
+# reserved for phase 2D3.
+EVENT_CANDIDATE_SOURCE_KINDS = (
+    "github_repository_candidate",
+    "official_announcement_candidate",
+)
+
+
+def event_candidate_entity_id(signal_type: str, subject: str, change_summary: str) -> str:
+    """Deterministic source-independent identity of one candidate change."""
+    return deterministic_id("event-candidate", signal_type, subject, change_summary)
+
+
+def event_candidate_source_ref_entity_id(
+    event_candidate_id: str, source_kind: str, ref_id: str
+) -> str:
+    return deterministic_id(
+        "event-candidate-source-ref", event_candidate_id, source_kind, ref_id
+    )
+
+
+@dataclass(frozen=True)
+class EventCandidate:
+    """One source-independent candidate description of a real AI change.
+
+    The identity is derived from ``(signal_type, subject, change_summary)``:
+    the same change recorded from different sources lands on the same row.
+    This is a CANDIDATE layer only - it never confirms an event, never reuses
+    the legacy 2B ``event`` table, and never carries raw payloads, URLs,
+    credentials or source-specific metadata.
+    """
+
+    signal_type: str
+    subject: str
+    change_summary: str
+    affected_audience: str
+    work_impact_hypothesis: str
+    research_priority: int
+    missing_evidence: Tuple[str, ...] = ()
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.signal_type not in SIGNAL_TYPES:
+            raise ValueError("invalid signal_type: %r" % self.signal_type)
+        for name in (
+            "subject",
+            "change_summary",
+            "affected_audience",
+            "work_impact_hypothesis",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("%s must be a non-empty string" % name)
+            object.__setattr__(self, name, value.strip())
+        if (
+            isinstance(self.research_priority, bool)
+            or not isinstance(self.research_priority, int)
+            or not 0 <= self.research_priority <= 100
+        ):
+            raise ValueError("research_priority must be an integer between 0 and 100")
+        object.__setattr__(self, "missing_evidence", as_tuple(self.missing_evidence))
+        if not all(
+            isinstance(code, str) and code.strip() for code in self.missing_evidence
+        ):
+            raise TypeError("missing_evidence must contain non-empty strings")
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                event_candidate_entity_id(
+                    self.signal_type, self.subject, self.change_summary
+                ),
+            )
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.created_at)
+        _normalize_datetimes(self, ("created_at", "updated_at"))
+
+
+@dataclass(frozen=True)
+class EventCandidateSourceRef:
+    """A reference from an EventCandidate to a source-specific candidate.
+
+    ``ref_id`` is a TEXT pointer into the source-specific table (no
+    cross-source FK, by design). ``ref_label`` is a safe, pre-validated
+    human-readable label - never a URL, payload or credential.
+    """
+
+    event_candidate_id: str
+    source_kind: str
+    ref_id: str
+    ref_label: str
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.event_candidate_id:
+            raise ValueError("event_candidate_id must not be empty")
+        if self.source_kind not in EVENT_CANDIDATE_SOURCE_KINDS:
+            raise ValueError("invalid source_kind: %r" % self.source_kind)
+        if not isinstance(self.ref_id, str) or not self.ref_id.strip():
+            raise ValueError("ref_id must be a non-empty string")
+        object.__setattr__(self, "ref_id", self.ref_id.strip())
+        if not isinstance(self.ref_label, str) or not self.ref_label.strip():
+            raise ValueError("ref_label must be a non-empty string")
+        object.__setattr__(self, "ref_label", self.ref_label.strip())
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                event_candidate_source_ref_entity_id(
+                    self.event_candidate_id, self.source_kind, self.ref_id
+                ),
+            )
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        _normalize_datetimes(self, ("created_at",))

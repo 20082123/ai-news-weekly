@@ -215,6 +215,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print recent discovery runs with safe counts",
     )
     p_disc_gh.add_argument("--limit", type=int, default=10)
+    # event-candidate (2C3) ---------------------------------------------------
+    p_evc = sub.add_parser(
+        "event-candidate",
+        help="source-independent event candidates (phase 2C3)",
+    )
+    evc_sub = p_evc.add_subparsers(dest="event_candidate_command", required=True)
+    p_evc_add = evc_sub.add_parser("add", help="record one event candidate")
+    p_evc_add.add_argument("--db-path", dest="db_path", required=True)
+    p_evc_add.add_argument("--signal-type", dest="signal_type", required=True)
+    p_evc_add.add_argument("--subject", required=True)
+    p_evc_add.add_argument("--change-summary", dest="change_summary", required=True)
+    p_evc_add.add_argument("--audience", dest="affected_audience", required=True)
+    p_evc_add.add_argument("--impact", dest="work_impact_hypothesis", required=True)
+    p_evc_add.add_argument("--priority", dest="research_priority", type=int, required=True)
+    p_evc_add.add_argument(
+        "--missing-evidence",
+        dest="missing_evidence",
+        default="",
+        help="comma-separated stable evidence codes",
+    )
+    p_evc_add.add_argument(
+        "--ref",
+        dest="refs",
+        action="append",
+        default=[],
+        help="kind:ref_id[:label], repeatable, e.g. "
+        "github_repository_candidate:<id>:<label>",
+    )
+    p_evc_list = evc_sub.add_parser("list", help="list event candidates (safe summary)")
+    p_evc_list.add_argument("--db-path", dest="db_path", required=True)
+    p_evc_list.add_argument("--signal-type", dest="signal_type")
     return parser
 
 
@@ -830,6 +861,110 @@ def cmd_discover_github(args, out) -> int:
     return EXIT_CAPABILITY
 
 
+def cmd_event_candidate(args, out) -> int:
+    from pathlib import Path
+
+    from .domain.models import (
+        SIGNAL_TYPES,
+        EventCandidate,
+        EventCandidateSourceRef,
+    )
+    from .pipeline.event_candidate import record_event_candidate
+    from .storage import sqlite as sqlite_storage
+    from .storage.event_candidate_repositories import (
+        EventCandidateRepository,
+        EventCandidateSourceRefRepository,
+    )
+
+    if args.event_candidate_command == "list":
+        if not Path(args.db_path).exists():
+            out.write("database does not exist\n")
+            return EXIT_DB_ERROR
+        try:
+            sqlite_storage.initialize_database(args.db_path)
+            with sqlite_storage.connect(args.db_path) as conn:
+                rows = EventCandidateRepository(conn).list(args.signal_type)
+                ref_repo = EventCandidateSourceRefRepository(conn)
+                for row in rows:
+                    refs = ref_repo.list_for_candidate(row.id)
+                    out.write(
+                        "id=%s type=%s priority=%d refs=%d subject=%s\n"
+                        % (row.id, row.signal_type, row.research_priority,
+                           len(refs), row.subject)
+                    )
+        except ValueError as exc:
+            out.write("config error: %s\n" % exc)
+            return EXIT_CONFIG_ERROR
+        except sqlite_storage.StorageError:
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        return EXIT_OK
+
+    # add
+    if args.signal_type not in SIGNAL_TYPES:
+        out.write("config error: invalid signal type\n")
+        return EXIT_CONFIG_ERROR
+    if (
+        isinstance(args.research_priority, bool)
+        or not isinstance(args.research_priority, int)
+        or not 0 <= args.research_priority <= 100
+    ):
+        out.write("invalid priority: must be 0-100\n")
+        return EXIT_CONFIG_ERROR
+    missing = tuple(
+        code.strip() for code in args.missing_evidence.split(",") if code.strip()
+    )
+    candidate = EventCandidate(
+        signal_type=args.signal_type,
+        subject=args.subject,
+        change_summary=args.change_summary,
+        affected_audience=args.affected_audience,
+        work_impact_hypothesis=args.work_impact_hypothesis,
+        research_priority=args.research_priority,
+        missing_evidence=missing,
+    )
+    refs = []
+    for raw in args.refs:
+        parts = raw.split(":", 2)
+        if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
+            out.write("config error: invalid --ref (expected kind:ref_id[:label])\n")
+            return EXIT_CONFIG_ERROR
+        kind, ref_id = parts[0].strip(), parts[1].strip()
+        label = parts[2].strip() if len(parts) == 3 and parts[2].strip() else ref_id
+        refs.append(EventCandidateSourceRef(
+            event_candidate_id=candidate.id,
+            source_kind=kind,
+            ref_id=ref_id,
+            ref_label=label,
+        ))
+
+    try:
+        sqlite_storage.initialize_database(args.db_path)
+        conn = sqlite_storage._open(args.db_path)
+        try:
+            conn.execute("BEGIN")
+            record = record_event_candidate(conn, candidate, refs)
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+    except ValueError as exc:
+        out.write("config error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+
+    out.write("id: %s\n" % record.candidate.id)
+    out.write("refs: %d\n" % len(record.refs))
+    return EXIT_OK
+
+
 def main(argv: Optional[list] = None, out=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -855,6 +990,8 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_candidate_qualify_github(args, stream)
     if args.command == "discover" and args.discover_command == "github":
         return cmd_discover_github(args, stream)
+    if args.command == "event-candidate":
+        return cmd_event_candidate(args, stream)
 
     parser.print_help(stream)
     return EXIT_OK

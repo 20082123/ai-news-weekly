@@ -46,6 +46,7 @@ last_updated: 2026-08-15
 | 2B3 中文 A–F 输出 | `verified` | 已生成 10 份中文文件 | `failed`：更可读，但素材质量低 | `superseded` 展示原型 |
 | 2C1 Candidate Qualification | `verified`，423 项总测试通过 | 尚未对真实 Vault 数据运行 | 尚未改善发现或素材质量 | 可保留的 GitHub 候选层 |
 | 2C2 GitHub Discovery Policy | 工程 `verified`（离线 495 项测试） | 无 | 待第一用户清单与受控联网 smoke | GitHub-specific Discovery Policy Adapter（DEC-013） |
+| 2C3 Source-independent Event Candidate | `in_progress`（2C3-A：五类 Taxonomy + EventCandidate 契约） | 无 | 不确认事件、不复用 2B event 表 | 薄的来源无关契约（DEC-014） |
 
 关键解释：
 
@@ -61,7 +62,7 @@ last_updated: 2026-08-15
 2C2 GitHub Discovery Policy Adapter               ✅ 工程完成（离线 495 项测试；真实运行待第一用户清单与受控 smoke）
 ↓
 2C3 Source-independent Discovery Gate
-     + Signal Taxonomy
+     + Signal Taxonomy                          in_progress（2C3-A：Taxonomy + EventCandidate 契约）
 ↓
 2D1 Source-neutral Research Core / ResearchDossier
 ↓

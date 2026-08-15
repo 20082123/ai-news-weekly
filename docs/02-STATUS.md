@@ -14,7 +14,7 @@ last_updated: 2026-08-15
 
 ## 1. 一句话状态
 
-> **线上旧周报继续稳定运行；新 AI Signal 影子分支已完成可靠的 GitHub 工程底座和 2C1 候选资格层，但尚未证明能稳定发现对目标用户有价值的 AI 工作变化。Golden Set 与产品文档继续推进；2C2 GitHub Discovery Policy Adapter 已完成工程实现（2C2-A～D，离线 495 项测试通过），等待第一用户的 Watchlist/Ecosystem 清单、受控联网 smoke 与真实运行验证。**
+> **线上旧周报继续稳定运行；新 AI Signal 影子分支已完成可靠的 GitHub 工程底座和 2C1 候选资格层，但尚未证明能稳定发现对目标用户有价值的 AI 工作变化。2C2 GitHub Discovery Policy Adapter 已工程完成（离线测试通过）并真实运行一次；Golden Set 以 4 份档案 + 20 行候选表封版（有好有坏）；2C3 source-independent EventCandidate 契约已开始实施。**
 
 ### 两套编号怎么理解
 
@@ -33,10 +33,10 @@ last_updated: 2026-08-15
 | 项目 | 当前事实 |
 | --- | --- |
 | Worktree 分支 | `codex/ai-signal-foundation` |
-| 当前 HEAD | `736750a feat(ai-signal): add watchlist direct snapshots and ecosystem relation gate (2C2-C)` |
+| 当前 HEAD | `4b2e9c3 docs: add golden-set workspace with four drafted annotation dossiers` |
 | 工作树 | 干净，无未提交文件 |
-| 相对本地 `origin/main` 引用 | 领先 10 个提交；本次未联网 fetch，因此不对远端实时状态作额外推断 |
-| 全量测试 | 495 项通过，2 项跳过 |
+| 相对本地 `origin/main` 引用 | 领先 13 个提交；本次未联网 fetch，因此不对远端实时状态作额外推断 |
+| 全量测试 | 529 项通过，2 项跳过 |
 | 线上入口 | 仍为 `python main.py` |
 | GitHub Actions | 仍执行旧 V0 周报，不读取 shadow 新管线 |
 | 冻结文件 | `main.py`、`requirements.txt`、`.github/workflows/weekly.yml` 相对本地 `origin/main` 无差异 |
@@ -112,7 +112,8 @@ GitHub Search Result
 | 2B1 GitHub REST | 工程与单次真实运行 `verified` | 能抓公开仓库元数据 | 召回质量低、没有具体事件 |
 | 2B2/2B3 A–F 素材 | 工程 `verified`，产品 `failed` | 10 份低质量中文素材 | repo≠event、缺 README/Release/影响研究 |
 | 2C1 Candidate | 工程 `verified` | 暂无真实用户效果 | 未真实运行，只是研究资格 Gate |
-| 2C2 GitHub Discovery Policy | 工程 `verified`（离线 495 项测试） | 无 | 待第一用户 Watchlist/Ecosystem 清单与受控联网 smoke；真实运行未验证 |
+| 2C2 GitHub Discovery Policy | 工程 `verified`（离线测试通过）；**已真实运行一次**（2026-W33，13 请求全 success） | 产出研究队列 20 条 queued | 待第一用户清单确认与后续 smoke | 只做 GitHub-specific policy adapter，输出 Research Queue；真实运行未验证 |
+| 2C3 Event Candidate 契约 | `in_progress`（2C3-A：Taxonomy + 0006 + CLI） | 无 | 不确认事件、不复用 2B event 表 | 薄的来源无关契约（DEC-014） |
 | Research Dossier | `planned` | 无 | 契约和实现均未完成 |
 | Official/Web | `planned` | 无 | 尚无 Adapter |
 | Editorial Decision | `planned` | 无 | 尚不能区分直接写/需测试 |
@@ -141,26 +142,27 @@ GitHub Search Result
 - 本地 Markdown 链接、代码围栏和 Git diff 空白检查已通过；
 - 无上下文的非技术读者与开发者读者测试均已 `PASS`；
 - 第一用户已决定重启 2C2 为 GitHub-specific Discovery Policy Adapter（DEC-013）；
-- **2C2-A～D 工程完成**：Policy Catalog（watchlist/mature/emerging/ecosystem-v1）、
-  0005 迁移四表、scope↔spec hash 防火墙、Mature/Emerging 编排（去重、预算、
-  Selection）、Watchlist 直采（github-repos-v1）、Ecosystem metadata relation
-  + Gate v3、CLI（discover github）与四条 Golden Cases；
-- **第一用户清单（草案）**：`watchlist-v1`（5 个仓库直采）与 `ecosystem-v1`
-  （核心项目 LangGraph + 强别名）已按草案填入 `policy.py` 的标记小节
-  （2026-08-16，未经第一用户确认）；替换条目只需改该小节；
-- **待第一用户授权**：受控联网 smoke 的逐次授权。
+- **2C2-A～D 工程完成并真实运行一次**：Policy Catalog、0005 四表、scope/spec
+  防火墙、Mature/Emerging 编排（去重、预算、Selection）、Watchlist 直采、
+  Ecosystem metadata relation + Gate v3、CLI 与四条 Golden Cases；2026-W33
+  四个策略真实采集（13 请求）全 success，产出研究队列 20 条 queued；
+- **Golden Set 封版（有好有坏）**：`docs/golden-set/` 4 份档案 + 20 行候选表；
+  GS-12 已记第一用户初判（不吸引 → reject）；
+- **2C3-A 进行中**：五类 Signal Taxonomy + `event_candidate`/
+  `event_candidate_source_ref`（0006）+ CLI；Golden 档案已种子入库；
+- **待第一用户**：Watchlist/Ecosystem 清单确认；后续受控 smoke 授权。
 
 Stage A 尚未完成：Golden Set 当前只有说明性种子，尚未完成 10～20 个真实样例的
 第一用户标注；`06-STAGE-B-SPEC.md` 也必须等 Golden Set 后才能起草和确认。
 
 ### Next
 
-- 第一用户提供 Watchlist 与 Ecosystem 清单，填入目录并跑离线 Golden Cases；
-- 经第一用户批准后做一次受控 `--allow-network` smoke（建议先 emerging-v1 单 probe）；
-- 由第一用户共同标注 10～20 个 Golden examples；
-- 用样例验证变化类型、受众任务、证据门槛和 Editorial 状态；
-- 根据 Golden Set 起草并由第一用户确认 `06-STAGE-B-SPEC.md`；
-- Golden Set 验收后进入 2C3 source-independent Discovery Gate + Signal Taxonomy。
+- 2C3-B：EventCandidate 与 GitHub 研究队列的对接（把 queued 候选引用进
+  event_candidate）、官方公告候选的最小形态；
+- 第一用户确认/替换 Watchlist 与 Ecosystem 草案清单；
+- 经第一用户批准后做后续受控 `--allow-network` smoke；
+- 由第一用户继续标注 Golden Set（可在 20 行表中继续填写判定）；
+- Golden Set 达标后起草 `06-STAGE-B-SPEC.md`，进入 2D1/2D2 自动深研。
 
 ### Later
 

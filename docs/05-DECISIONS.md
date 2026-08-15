@@ -283,6 +283,29 @@ GitHub 已实现，是最便宜的下一个纵切；但继续扩展 GitHub 会�
 - 不做 README/Release 读取、不做 YAML/DSL policy engine、不做 LLM 排序、不做调度器；
 - 2C2 完成后停止连续扩展 GitHub，先实施 2C3 source-independent 契约。
 
+## DEC-014：2C3 只建立薄的 source-independent EventCandidate 契约
+
+- **日期**：2026-08-15
+- **状态**：`accepted`
+
+### 决定
+
+2C3 交付：五类全局 Signal Type（`capability_change` / `tool_workflow_change` /
+`user_reality` / `economics_access` / `ecosystem_market_shift`）+ `event_candidate`
+与 `event_candidate_source_ref` 两表（迁移 0006）+ CLI。EventCandidate 只记录
+“候选变化”，**不确认事件**、**不复用 2B legacy `event` 表**、不产素材。
+
+### 原因
+
+在 2C1/2C2 的 GitHub-specific 候选层之上，需要一个最薄的汇合点：同一个真实变化
+被多个来源发现时落在同一行。先完成契约，再谈 Gate 与研究。
+
+### 后果与代价
+
+- 源引用用 `(source_kind, ref_id, ref_label)` 指针，不设跨来源外键（官方候选表尚不存在）；
+- 首批 Golden Set 档案已作为 EventCandidate 种子写入开发库；
+- 事件确认 Gate（confirmed/unresolved/discarded）与 Editorial 留给 2E。
+
 ## 待第一用户复核的 Proposed Decisions
 
 完成 Golden Set 时，应一起确认或修改：

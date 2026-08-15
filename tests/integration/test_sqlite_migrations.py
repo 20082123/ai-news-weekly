@@ -40,6 +40,8 @@ _EXPECTED_TABLES = (
     "github_discovery_probe_run",
     "github_discovery_scope_binding",
     "github_candidate_selection",
+    "event_candidate",
+    "event_candidate_source_ref",
 )
 
 
@@ -266,9 +268,9 @@ class MigrationsTest(unittest.TestCase):
             conn.close()
 
     def test_migration_0004_applies_on_fresh_and_upgrade(self):
-        # Fresh database: all migrations apply in order (0005 exists now).
+        # Fresh database: all migrations apply in order (0006 exists now).
         status = S.initialize_database(self.db)
-        self.assertEqual(status["latest_applied"], 5)
+        self.assertEqual(status["latest_applied"], 6)
         with S.connect(self.db) as conn:
             names = {
                 row[0]
@@ -278,7 +280,7 @@ class MigrationsTest(unittest.TestCase):
         self.assertIn("candidate_discovery", names)
         self.assertIn("candidate_assessment", names)
 
-        # Upgrade path: a database frozen at 0003 upgrades cleanly to 0004/0005.
+        # Upgrade path: a database frozen at 0003 upgrades cleanly to 0004+.
         old_dir = pathlib.Path(self.tmp) / "old3"
         old_dir.mkdir()
         real_dir = pathlib.Path(S._MIGRATIONS_DIR)
@@ -296,17 +298,17 @@ class MigrationsTest(unittest.TestCase):
         finally:
             S._MIGRATIONS_DIR = original
         status2 = S.initialize_database(db2)
-        self.assertEqual(status2["latest_applied"], 5)
+        self.assertEqual(status2["latest_applied"], 6)
         # Repeated initialization stays idempotent.
         S.initialize_database(db2)
         with S.connect(db2) as conn:
             count = conn.execute("SELECT COUNT(*) FROM schema_migration").fetchone()[0]
-        self.assertEqual(count, 5)
+        self.assertEqual(count, 6)
 
     def test_migration_0005_applies_on_fresh_and_upgrade(self):
-        # Fresh database: all five migrations apply in order.
+        # Fresh database: all migrations apply in order (0006 exists now).
         status = S.initialize_database(self.db)
-        self.assertEqual(status["latest_applied"], 5)
+        self.assertEqual(status["latest_applied"], 6)
         with S.connect(self.db) as conn:
             names = {
                 row[0]
@@ -320,7 +322,7 @@ class MigrationsTest(unittest.TestCase):
         ):
             self.assertIn(table, names)
 
-        # Upgrade path: a database frozen at 0004 upgrades cleanly to 0005.
+        # Upgrade path: a database frozen at 0004 upgrades cleanly to 0005+.
         old_dir = pathlib.Path(self.tmp) / "old4"
         old_dir.mkdir()
         real_dir = pathlib.Path(S._MIGRATIONS_DIR)
@@ -339,12 +341,50 @@ class MigrationsTest(unittest.TestCase):
         finally:
             S._MIGRATIONS_DIR = original
         status2 = S.initialize_database(db2)
-        self.assertEqual(status2["latest_applied"], 5)
+        self.assertEqual(status2["latest_applied"], 6)
         # Repeated initialization stays idempotent.
         S.initialize_database(db2)
         with S.connect(db2) as conn:
             count = conn.execute("SELECT COUNT(*) FROM schema_migration").fetchone()[0]
-        self.assertEqual(count, 5)
+        self.assertEqual(count, 6)
+
+    def test_migration_0006_applies_on_fresh_and_upgrade(self):
+        # Fresh database: all six migrations apply in order.
+        status = S.initialize_database(self.db)
+        self.assertEqual(status["latest_applied"], 6)
+        with S.connect(self.db) as conn:
+            names = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+        for table in ("event_candidate", "event_candidate_source_ref"):
+            self.assertIn(table, names)
+
+        # Upgrade path: a database frozen at 0005 upgrades cleanly to 0006.
+        old_dir = pathlib.Path(self.tmp) / "old5"
+        old_dir.mkdir()
+        real_dir = pathlib.Path(S._MIGRATIONS_DIR)
+        for name in (
+            "0001_initial.sql",
+            "0002_source_collection.sql",
+            "0003_raw_signal_observation.sql",
+            "0004_candidate_qualification.sql",
+            "0005_github_discovery_policy.sql",
+        ):
+            shutil.copy2(real_dir / name, old_dir)
+        db2 = os.path.join(self.tmp, "upgrade.db")
+        original = S._MIGRATIONS_DIR
+        S._MIGRATIONS_DIR = old_dir
+        try:
+            S.initialize_database(db2)
+        finally:
+            S._MIGRATIONS_DIR = original
+        status2 = S.initialize_database(db2)
+        self.assertEqual(status2["latest_applied"], 6)
+        S.initialize_database(db2)
+        with S.connect(db2) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM schema_migration").fetchone()[0]
+        self.assertEqual(count, 6)
 
     def test_temp_directory_cleanup_pattern(self):
         tmp = tempfile.mkdtemp(prefix="ai_signal_tmp_")

@@ -419,6 +419,33 @@ selection per candidate per policy run; the row id is deterministic
   every probe succeeded, `failed` when every probe is failed/blocked, and
   `partial` otherwise.
 
+## Phase 2C3: source-independent event candidates (migration 0006)
+
+Migration `0006_event_candidate.sql` adds two tables for the thin
+source-independent contract (purely additive; 0001-0005 are immutable). It
+records candidates only - no event confirmation, no legacy `event` reuse.
+
+### `event_candidate`
+
+One row per real AI change, identified source-independently by
+`(signal_type, subject, change_summary)` (`UNIQUE`; the id is
+`deterministic_id("event-candidate", signal_type, subject, change_summary)`).
+Fields: `signal_type` (CHECK: the five global Signal Types), `subject`,
+`change_summary`, `affected_audience`, `work_impact_hypothesis`,
+`missing_evidence` (JSON array of stable codes), `research_priority` (0-100,
+higher = more urgent). The same change discovered via different sources lands
+on one row.
+
+### `event_candidate_source_ref`
+
+Source-specific candidate references: `source_kind` (CHECK:
+`github_repository_candidate | official_announcement_candidate`), `ref_id` (a
+TEXT pointer into the source-specific table - deliberately NO cross-source
+foreign key, since official candidates do not exist yet), and `ref_label` (a
+safe, pre-validated human-readable label; never a URL or payload).
+`UNIQUE (event_candidate_id, source_kind, ref_id)`; the row id is
+deterministic over the same triple.
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes
