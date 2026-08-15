@@ -1418,3 +1418,214 @@ class EventCandidateSourceRef:
         if self.created_at is None:
             object.__setattr__(self, "created_at", now_utc())
         _normalize_datetimes(self, ("created_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Research dossier + editorial decision (phases 2D/2E)
+# --------------------------------------------------------------------------- #
+DOSSIER_STATUSES = ("draft", "complete", "partial", "failed")
+FACT_KINDS = ("fact", "official_claim", "unknown", "contradiction")
+FACT_SOURCE_KINDS = (
+    "github_release",
+    "github_readme",
+    "github_metadata",
+    "official_page",
+    "manual",
+)
+EDITORIAL_DECISIONS = ("ready_to_write", "needs_testing", "watch", "reject")
+EDITORIAL_POLICY_VERSION = "editorial-v1"
+
+
+def research_dossier_entity_id(event_candidate_id: str, bundle_hash: str) -> str:
+    """Deterministic dossier id: same content for the same candidate."""
+    return deterministic_id("research-dossier", event_candidate_id, bundle_hash)
+
+
+def research_fact_entity_id(
+    dossier_id: str, kind: str, source_url: Optional[str], text: str
+) -> str:
+    return deterministic_id("research-fact", dossier_id, kind, source_url or "", text)
+
+
+def editorial_decision_entity_id(
+    dossier_id: str, policy_version: str, input_hash: str
+) -> str:
+    return deterministic_id("editorial-decision", dossier_id, policy_version, input_hash)
+
+
+def _require_json_text_array(value: Any, name: str) -> Tuple[str, ...]:
+    """Validate a tuple of non-empty strings (stored as a JSON array)."""
+    items = as_tuple(value)
+    if not all(isinstance(item, str) and item.strip() for item in items):
+        raise TypeError("%s must contain non-empty strings" % name)
+    return tuple(item.strip() for item in items)
+
+
+def _validate_evidence_url(value: Optional[str], name: str) -> Optional[str]:
+    """First-party evidence URLs: https only, no credentials, no control chars.
+
+    This is deliberately looser than the repository IDENTITY allow-list: an
+    evidence URL may point at an official page anywhere, but it must be a
+    clean https URL with no embedded credentials. Untrusted user metadata
+    (e.g. GitHub ``homepage``) still never reaches storage; evidence URLs
+    come from first-party API responses and are syntax-checked here.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("%s must be a non-empty https URL or None" % name)
+    text = value.strip()
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
+        raise ValueError("%s contains control characters" % name)
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(text)
+        port = parsed.port
+    except (TypeError, ValueError):
+        raise ValueError("%s is not a valid URL" % name)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("%s must be a clean https URL" % name)
+    return text
+
+
+@dataclass(frozen=True)
+class ResearchDossier:
+    """One evidence-backed research record for an event candidate.
+
+    The identity is ``(event_candidate_id, bundle_hash)``: new evidence
+    yields a new revision while history stays auditable. All prose fields
+    carry only quoted first-party facts plus explicit unknown/limit lists -
+    never fabricated conclusions.
+    """
+
+    event_candidate_id: str
+    summary_judgment: str
+    timeline: Tuple[str, ...]
+    target_audience: str
+    job_to_be_done: str
+    limits_unknowns: Tuple[str, ...]
+    forbidden_claims: Tuple[str, ...]
+    needs_testing: bool
+    test_plan: Tuple[str, ...]
+    status: str = "complete"
+    bundle_hash: str = ""
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.event_candidate_id:
+            raise ValueError("event_candidate_id must not be empty")
+        if self.status not in DOSSIER_STATUSES:
+            raise ValueError("invalid dossier status: %r" % self.status)
+        for name in ("summary_judgment", "target_audience", "job_to_be_done"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("%s must be a non-empty string" % name)
+            object.__setattr__(self, name, value.strip())
+        object.__setattr__(self, "timeline", _require_json_text_array(self.timeline, "timeline"))
+        object.__setattr__(self, "limits_unknowns", _require_json_text_array(self.limits_unknowns, "limits_unknowns"))
+        object.__setattr__(self, "forbidden_claims", _require_json_text_array(self.forbidden_claims, "forbidden_claims"))
+        object.__setattr__(self, "test_plan", _require_json_text_array(self.test_plan, "test_plan"))
+        if not isinstance(self.needs_testing, bool):
+            raise TypeError("needs_testing must be a bool")
+        if self.bundle_hash == "":
+            # Computed by the pipeline from the canonical fact set; a bare
+            # placeholder keeps direct construction possible for tests.
+            object.__setattr__(self, "bundle_hash", deterministic_id("dossier", self.event_candidate_id))
+        if not isinstance(self.bundle_hash, str) or len(self.bundle_hash) != 64:
+            raise ValueError("bundle_hash must be a 64-character hex string")
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                research_dossier_entity_id(self.event_candidate_id, self.bundle_hash),
+            )
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.created_at)
+        _normalize_datetimes(self, ("created_at", "updated_at"))
+
+
+@dataclass(frozen=True)
+class ResearchFact:
+    """One auditable fact bound to a dossier (quoted, never fabricated)."""
+
+    dossier_id: str
+    kind: str
+    text: str
+    source_kind: str
+    source_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.dossier_id:
+            raise ValueError("dossier_id must not be empty")
+        if self.kind not in FACT_KINDS:
+            raise ValueError("invalid fact kind: %r" % self.kind)
+        if not isinstance(self.text, str) or not self.text.strip():
+            raise ValueError("fact text must be a non-empty string")
+        object.__setattr__(self, "text", self.text.strip())
+        if self.source_kind not in FACT_SOURCE_KINDS:
+            raise ValueError("invalid fact source_kind: %r" % self.source_kind)
+        object.__setattr__(
+            self, "source_url", _validate_evidence_url(self.source_url, "source_url")
+        )
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                research_fact_entity_id(
+                    self.dossier_id, self.kind, self.source_url, self.text
+                ),
+            )
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        _normalize_datetimes(self, ("created_at",))
+
+
+@dataclass(frozen=True)
+class EditorialDecision:
+    """One deterministic editorial decision for a dossier revision."""
+
+    dossier_id: str
+    policy_version: str
+    input_hash: str
+    decision: str
+    reason_codes: Tuple[str, ...]
+    decided_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.dossier_id or not self.policy_version:
+            raise ValueError("dossier_id and policy_version must not be empty")
+        if not isinstance(self.input_hash, str) or len(self.input_hash) != 64:
+            raise ValueError("input_hash must be a 64-character hex string")
+        try:
+            int(self.input_hash, 16)
+        except ValueError as exc:
+            raise ValueError("input_hash must be a hex string") from exc
+        if self.decision not in EDITORIAL_DECISIONS:
+            raise ValueError("invalid editorial decision: %r" % self.decision)
+        object.__setattr__(self, "reason_codes", as_tuple(self.reason_codes))
+        if not all(isinstance(code, str) and code.strip() for code in self.reason_codes):
+            raise TypeError("reason_codes must contain non-empty strings")
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                editorial_decision_entity_id(
+                    self.dossier_id, self.policy_version, self.input_hash
+                ),
+            )
+        if self.decided_at is None:
+            object.__setattr__(self, "decided_at", now_utc())
+        _normalize_datetimes(self, ("decided_at",))

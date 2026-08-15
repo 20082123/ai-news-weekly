@@ -43,9 +43,12 @@ _LEGACY_SHA256 = {
 # Network/subprocess modules forbidden in EVERY production module.
 _FORBIDDEN_IMPORTS_EVERYWHERE = ("requests", "httpx", "socket", "subprocess")
 
-# urllib.request / urllib.error are allowed ONLY in the REST client module.
+# urllib.request / urllib.error are allowed ONLY in the two transport modules
+# (the GitHub REST/research client and the phase-2D3 official-page client).
 _NETWORK_IMPORTS_RESTRICTED = ("urllib.request", "urllib.error")
 _REST_MODULE = pathlib.PurePath("src") / "ai_signal" / "sources" / "github_rest.py"
+_OFFICIAL_MODULE = pathlib.PurePath("src") / "ai_signal" / "sources" / "official_http.py"
+_NETWORK_MODULES = (_REST_MODULE, _OFFICIAL_MODULE)
 
 # Network modules forbidden in test code (tests must never use real network).
 _FORBIDDEN_TEST_IMPORTS = (
@@ -138,13 +141,14 @@ class ProductionImportBoundaryTest(unittest.TestCase):
             rel = path.relative_to(ROOT)
             tree = ast.parse(path.read_text(encoding="utf-8"))
             names = _imported_dotted_names(tree)
-            is_rest_module = rel == _REST_MODULE
+            is_network_module = rel in _NETWORK_MODULES
             for name in names:
                 for forbidden in _FORBIDDEN_IMPORTS_EVERYWHERE:
                     if name == forbidden or name.startswith(forbidden + "."):
                         offenders.append((str(rel), name))
-                # urllib.request / urllib.error only permitted in the REST client.
-                if not is_rest_module:
+                # urllib.request / urllib.error only permitted in the two
+                # transport modules (GitHub REST + official HTTP).
+                if not is_network_module:
                     for forbidden in _NETWORK_IMPORTS_RESTRICTED:
                         if name == forbidden or name.startswith(forbidden + "."):
                             offenders.append((str(rel), name))
@@ -154,13 +158,14 @@ class ProductionImportBoundaryTest(unittest.TestCase):
             "forbidden network/subprocess imports found: %s" % offenders,
         )
 
-    def test_rest_module_is_the_only_urllib_user(self):
-        # Conversely: the REST client MUST be the one module allowed to use urllib.
-        rest_path = ROOT / _REST_MODULE
-        tree = ast.parse(rest_path.read_text(encoding="utf-8"))
-        names = _imported_dotted_names(tree)
-        joined = " ".join(names)
-        self.assertIn("urllib.request", joined)
+    def test_transport_modules_are_the_only_urllib_users(self):
+        # Conversely: both transport modules MUST use urllib (they own all
+        # production network access).
+        for module in _NETWORK_MODULES:
+            with self.subTest(module=str(module)):
+                tree = ast.parse((ROOT / module).read_text(encoding="utf-8"))
+                joined = " ".join(_imported_dotted_names(tree))
+                self.assertIn("urllib.request", joined)
 
     def test_test_code_has_no_network_imports(self):
         offenders = []

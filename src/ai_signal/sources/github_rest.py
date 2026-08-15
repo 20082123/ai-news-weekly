@@ -551,3 +551,174 @@ class GitHubReposClient:
                 return ERR_RATE_LIMITED
             return ERR_HTTP_AUTH
         return ERR_HTTP_FAILURE
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2D2: read-only research fetches (README + releases)
+# --------------------------------------------------------------------------- #
+# Same network posture as everything else in this module: api.github.com
+# only, no credentials, redirects blocked, bounded responses. The returned
+# TEXT IS UNTRUSTED INPUT: downstream code must treat it like any external
+# content (control-character stripping, length caps, no execution).
+
+_DEFAULT_TEXT_CAP = 6000  # characters kept from README/release bodies
+
+
+def _decode_json_body(response: HttpResponse, max_bytes: int) -> Any:
+    """Shared strict JSON decode for research fetches."""
+    if len(response.body) > max_bytes:
+        raise GitHubClientError(ERR_RESPONSE_TOO_LARGE)
+    if response.status != 200:
+        raise GitHubClientError(
+            GitHubReposClient._map_status(response.status, response.headers)
+        )
+    content_type = _header_get(response.headers, "Content-Type")
+    if "json" not in content_type.lower():
+        raise GitHubClientError(ERR_INVALID_CONTENT_TYPE)
+    try:
+        data = json.loads(response.body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise GitHubClientError(ERR_INVALID_JSON) from exc
+    return data
+
+
+def _verify_final_url_https(final_url: str) -> None:
+    try:
+        parsed = urlparse(final_url)
+    except (TypeError, ValueError):
+        raise GitHubClientError(ERR_REDIRECT_BLOCKED)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != _HOST
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in (None, 443)
+    ):
+        raise GitHubClientError(ERR_REDIRECT_BLOCKED)
+
+
+class GitHubReadmeClient:
+    """Fetch a repository README as decoded text (bounded, untrusted)."""
+
+    def __init__(
+        self,
+        transport: HttpTransport,
+        *,
+        timeout_seconds: int = 10,
+        max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+        text_cap: int = _DEFAULT_TEXT_CAP,
+    ) -> None:
+        self._transport = transport
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
+            raise ValueError("timeout_seconds must be an integer")
+        if not 1 <= timeout_seconds <= 30:
+            raise ValueError("timeout_seconds must be between 1 and 30")
+        self._timeout_seconds = timeout_seconds
+        if not isinstance(max_response_bytes, int) or max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
+        self._max_response_bytes = max_response_bytes
+        if not isinstance(text_cap, int) or text_cap <= 0:
+            raise ValueError("text_cap must be positive")
+        self._text_cap = text_cap
+
+    def fetch(self, full_name: str) -> str:
+        """Return the decoded README text (capped), never the raw payload."""
+        owner, repo = full_name.split("/", 1)
+        url = _REPOS_PATH_TEMPLATE.format(owner=owner, repo=repo) + "/readme"
+        try:
+            response = self._transport.get(
+                url, _DEFAULT_HEADERS, self._timeout_seconds, self._max_response_bytes
+            )
+        except GitHubClientError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - classify into a stable code
+            raise GitHubClientError(_classify_transport_error(exc)) from exc
+        _verify_final_url_https(response.final_url)
+        data = _decode_json_body(response, self._max_response_bytes)
+        content = data.get("content") if isinstance(data, dict) else None
+        if not isinstance(content, str):
+            raise GitHubClientError(ERR_INVALID_RESPONSE)
+        import base64
+
+        try:
+            raw = base64.b64decode(content).decode("utf-8", errors="replace")
+        except (ValueError, TypeError) as exc:
+            raise GitHubClientError(ERR_INVALID_RESPONSE) from exc
+        return raw[: self._text_cap]
+
+
+class GitHubReleasesClient:
+    """Fetch recent releases of a repository (bounded list of summaries)."""
+
+    def __init__(
+        self,
+        transport: HttpTransport,
+        *,
+        timeout_seconds: int = 10,
+        max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+        body_cap: int = _DEFAULT_TEXT_CAP,
+        per_page: int = 5,
+    ) -> None:
+        self._transport = transport
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
+            raise ValueError("timeout_seconds must be an integer")
+        if not 1 <= timeout_seconds <= 30:
+            raise ValueError("timeout_seconds must be between 1 and 30")
+        self._timeout_seconds = timeout_seconds
+        if not isinstance(max_response_bytes, int) or max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
+        self._max_response_bytes = max_response_bytes
+        if not isinstance(body_cap, int) or body_cap <= 0:
+            raise ValueError("body_cap must be positive")
+        self._body_cap = body_cap
+        if isinstance(per_page, bool) or not isinstance(per_page, int) or not 1 <= per_page <= 10:
+            raise ValueError("per_page must be between 1 and 10")
+        self._per_page = per_page
+
+    def fetch(self, full_name: str):
+        """Return recent releases as a list of safe dicts.
+
+        Each entry: ``tag``, ``name``, ``body`` (capped text), ``published_at``
+        (ISO), ``html_url`` (a first-party release URL, https-checked).
+        """
+        owner, repo = full_name.split("/", 1)
+        url = (
+            _REPOS_PATH_TEMPLATE.format(owner=owner, repo=repo)
+            + "/releases?per_page=%d" % self._per_page
+        )
+        try:
+            response = self._transport.get(
+                url, _DEFAULT_HEADERS, self._timeout_seconds, self._max_response_bytes
+            )
+        except GitHubClientError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise GitHubClientError(_classify_transport_error(exc)) from exc
+        _verify_final_url_https(response.final_url)
+        data = _decode_json_body(response, self._max_response_bytes)
+        if not isinstance(data, list):
+            raise GitHubClientError(ERR_INVALID_RESPONSE)
+        out = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            tag = item.get("tag_name")
+            html_url = item.get("html_url")
+            if not isinstance(tag, str) or not tag.strip():
+                continue
+            if not isinstance(html_url, str) or not html_url.startswith("https://"):
+                continue
+            body = item.get("body")
+            body_text = body if isinstance(body, str) else ""
+            out.append(
+                {
+                    "tag": tag,
+                    "name": item.get("name") if isinstance(item.get("name"), str) else "",
+                    "body": body_text[: self._body_cap],
+                    "published_at": item.get("published_at")
+                    if isinstance(item.get("published_at"), str)
+                    else "",
+                    "html_url": html_url,
+                }
+            )
+        return out
