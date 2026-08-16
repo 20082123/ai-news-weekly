@@ -9,8 +9,9 @@ $env:PYTHONPATH = "src"
 ```
 
 数据库：`./.ai-signal/ai_signal.db`；开发输出：`./.ai-signal/Content/`。
-生产输出根目录（DEC-018 已定）：Obsidian Vault 的 `AI Signal/Content/`
-（首次写入真实 Vault 仍需第一用户批准，AGENTS.md 硬约束）。
+生产输出根目录（DEC-018，**已获第一用户批准，2026-08-16**）：
+`C:\Users\HP\Documents\AI-Signals\AI Signal\Content\`——批准范围仅限 Vault 的
+`AI Signal/` 子树，不得写 Vault 其他位置。
 
 ---
 
@@ -131,9 +132,9 @@ python -m ai_signal official list --db-path ./.ai-signal/ai_signal.db
 Obsidian 里填，代理跑 sync 落库：
 
 ```powershell
-# Content 目录 = 选题卡所在目录（开发：./.ai-signal/Content；生产：Vault/AI Signal/Content）
+# Content 目录 = 选题卡所在目录（生产：C:\Users\HP\Documents\AI-Signals\AI Signal\Content）
 python -m ai_signal feedback sync --db-path ./.ai-signal/ai_signal.db `
-  --content-dir "./.ai-signal/Content" --allow-feedback-write
+  --content-dir "C:\Users\HP\Documents\AI-Signals\AI Signal\Content" --allow-feedback-write
 
 # 2B 时代的旧 Inbox 包（可选，同时扫）：
 python -m ai_signal feedback sync --db-path ./.ai-signal/ai_signal.db `

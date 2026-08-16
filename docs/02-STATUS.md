@@ -40,9 +40,8 @@ last_updated: 2026-08-16
 | 线上入口 | 仍为 `python main.py`（V0 冻结，不在本分支开发） |
 | 冻结文件 | `main.py`、`requirements.txt`、`.github/workflows/weekly.yml` 无差异 |
 
-开发库：`./.ai-signal/ai_signal.db`（git-ignored）；开发输出：`./.ai-signal/Content/`。
-生产输出根目录（DEC-018）：Obsidian Vault 的 `AI Signal/Content/`，首次写入
-真实 Vault 待第一用户批准（AGENTS.md 硬约束）。
+开发库：`./.ai-signal/ai_signal.db`（git-ignored）；生产输出（**已批准 2026-08-16**）：
+`C:\Users\HP\Documents\AI-Signals\AI Signal\Content\`（批准范围仅限 `AI Signal/` 子树）。
 
 ## 3. 真实数据快照（2026-08-16）
 
@@ -121,5 +120,6 @@ Golden Set：4+1 份档案（GS-01/06/07/12/21）+ 20 行候选标注表，
 
 1. 第一条内容发在哪个平台（X / 公众号 / 小红书 / B站 / 其他）；
 2. ai-agent-book 选题是否作为第一条发出（初稿已就绪）；
-3. 批准真实 Obsidian Vault 写入路径：`C:\Users\HP\Documents\AI-Signals`
-   下的 `AI Signal/Content/`（当前默认仍写开发目录）。
+3. ~~批准真实 Obsidian Vault 写入路径~~ **已批准（2026-08-16）**：
+   `C:\Users\HP\Documents\AI-Signals\AI Signal\Content\`，第一张卡
+   （QwenLM-qwen-code）已写入。
