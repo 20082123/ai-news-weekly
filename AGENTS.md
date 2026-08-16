@@ -24,7 +24,10 @@
 - 真实 Obsidian Vault（`C:\Users\HP\Documents\AI-Signals`）**已获批准写入范围
   （2026-08-16）仅限 `AI Signal/` 子树**；Vault 其他位置仍不得写入；
 - Reddit/X 登录态只存在于 agent-reach（OpenCLI/twitter-cli/rdt-cli），系统内不存任何登录态；
-- 不在系统里接 LLM 写稿：机器出事实/零件/判定草案，初稿由外部模型按提示包生成、人终审。
+- 不在系统里接 LLM 写稿：机器出事实/零件/判定草案，初稿由外部模型按提示包生成、人终审；
+- **任何 agent 替用户写平台内容（主线/副线成品稿），必须全程遵守
+  `docs/06-爆款写作规范.md`，且最后必须过 humanizer 去 AI 味**
+  （防平台 AI 检测限流）；没过 humanizer 的稿子不得以「成品」交付用户。
 
 ## 环境与命令约定
 
