@@ -328,6 +328,32 @@ GitHub 已实现，是最便宜的下一个纵切；但继续扩展 GitHub 会�
 - Reddit/X 的实时可用性依赖 agent-reach 后端（Chrome + OpenCLI 扩展或
   twitter-cli/rdt-cli 登录态）。
 
+## DEC-017：系统的圆心是“你这周写什么”，不是事件堆
+
+- **日期**：2026-08-15
+- **状态**：`accepted`
+
+### 决定
+
+1. 新形状（取代“攒事件库”）：
+   `你挑选题 → 系统按证据缺口拉来源 → 研究/判定/四问 → 初稿 → 发布 → 反馈回流`；
+2. 来源永不排队、无主从：官方公告/GitHub/Reddit/X 围绕**同一个缺口清单**
+   各补一格（缺口→来源路由目录 `discovery/gap_routing.py`），够了就停；
+3. 选题登记入 `creator_choice`（0009）；发布反馈复用 `feedback` 表
+   （target_type=creator_choice，adopted/parked/rejected）；
+4. 每周后台采集降级为“候选供货”，不再是主流程。
+
+### 原因
+
+线性流水线会把来源变成上下游、把“先采集后使用”请回来（头号风险“再次
+来源中心化”）；以创作者选题为圆心，采集与研究回归中间件本位。
+
+### 后果与代价
+
+- 新增 `choice pick/gaps/feedback/list` CLI；`personal_testing` 缺口永远
+  指向第一用户本人；
+- 事件库仍保留（供候选与聚合），但不再驱动生产节奏。
+
 ## 待第一用户复核的 Proposed Decisions
 
 完成 Golden Set 时，应一起确认或修改：

@@ -366,6 +366,36 @@ def _build_parser() -> argparse.ArgumentParser:
     p_off_list.add_argument("--db-path", dest="db_path", required=True)
     p_off_list.add_argument("--status", dest="status")
     p_off_list.add_argument("--limit", type=int, default=30)
+
+    # choice (DEC-017 creator-centric hub) ------------------------------------
+    p_ch = sub.add_parser(
+        "choice", help="creator-centric weekly choices (DEC-017)"
+    )
+    ch_sub = p_ch.add_subparsers(dest="choice_command", required=True)
+    p_ch_pick = ch_sub.add_parser("pick", help="register this week's choice")
+    p_ch_pick.add_argument("--db-path", dest="db_path", required=True)
+    p_ch_pick.add_argument("--week-key", dest="week_key", required=True)
+    p_ch_pick.add_argument("--subject", required=True)
+    p_ch_pick.add_argument("--event-id", dest="event_id")
+    p_ch_gaps = ch_sub.add_parser("gaps", help="show the evidence gap list")
+    p_ch_gaps.add_argument("--db-path", dest="db_path", required=True)
+    p_ch_gaps.add_argument("--week-key", dest="week_key", required=True)
+    p_ch_gaps.add_argument("--subject", required=True)
+    p_ch_fb = ch_sub.add_parser(
+        "feedback", help="record the published outcome (adopted/parked/rejected)"
+    )
+    p_ch_fb.add_argument("--db-path", dest="db_path", required=True)
+    p_ch_fb.add_argument("--week-key", dest="week_key", required=True)
+    p_ch_fb.add_argument("--subject", required=True)
+    p_ch_fb.add_argument("--decision", required=True)
+    p_ch_fb.add_argument("--reason", required=True)
+    p_ch_fb.add_argument("--audience", dest="audience")
+    p_ch_fb.add_argument("--angle", dest="angle")
+    p_ch_fb.add_argument("--usefulness", dest="usefulness", type=int)
+    p_ch_fb.add_argument("--published-url", dest="published_url")
+    p_ch_list = ch_sub.add_parser("list", help="list weekly choices")
+    p_ch_list.add_argument("--db-path", dest="db_path", required=True)
+    p_ch_list.add_argument("--week-key", dest="week_key")
     return parser
 
 
@@ -1534,6 +1564,108 @@ def cmd_weekly(args, out) -> int:
     return EXIT_OK
 
 
+def cmd_choice(args, out) -> int:
+    from pathlib import Path
+
+    from .domain.models import FEEDBACK_DECISIONS
+    from .pipeline.creator import (
+        CreatorChoiceRepository,
+        assess_choice_gaps,
+        record_choice,
+        record_choice_feedback,
+    )
+    from .storage import sqlite as sqlite_storage
+
+    if not _WEEK_KEY_RE.match(args.week_key):
+        out.write("invalid week key: expected YYYY-Www\n")
+        return EXIT_CONFIG_ERROR
+    if not Path(args.db_path).exists():
+        out.write("database does not exist\n")
+        return EXIT_DB_ERROR
+    try:
+        sqlite_storage.initialize_database(args.db_path)
+        conn = sqlite_storage._open(args.db_path)
+        try:
+            repo = CreatorChoiceRepository(conn)
+            choices = [
+                c for c in repo.list(args.week_key) if c.subject == args.subject
+            ]
+
+            if args.choice_command == "pick":
+                conn.execute("BEGIN")
+                choice = record_choice(
+                    conn, args.week_key, args.subject, args.event_id
+                )
+                conn.execute("COMMIT")
+                out.write("choice_id: %s\n" % choice.id)
+                out.write("subject: %s\n" % choice.subject)
+                out.write("status: %s\n" % choice.status)
+                out.write("next: 运行 `choice gaps` 看证据缺口清单\n")
+                return EXIT_OK
+
+            if args.choice_command == "list":
+                rows = repo.list(args.week_key)
+                for row in rows:
+                    out.write("[%s] %s | %s\n" % (row.week_key, row.status, row.subject))
+                return EXIT_OK
+
+            if not choices:
+                out.write("no choice for this week/subject; run `choice pick` first\n")
+                return EXIT_CONFIG_ERROR
+            choice = choices[0]
+
+            if args.choice_command == "gaps":
+                report = assess_choice_gaps(conn, choice)
+                if not report.linked_event:
+                    out.write("未关联事件：请先 pick 时给 --event-id，或直接按主题研究\n")
+                elif not report.has_dossier:
+                    out.write("已关联事件但无档案：先 `research build --event-id %s`\n"
+                              % choice.event_candidate_id)
+                out.write("证据缺口清单：\n")
+                for gap, label, how in report.gaps:
+                    out.write("  - [%s] %s —— %s\n" % (gap, label, how))
+                return EXIT_OK
+
+            if args.choice_command == "feedback":
+                if args.decision not in FEEDBACK_DECISIONS:
+                    out.write("config error: decision 必须是 adopted/parked/rejected\n")
+                    return EXIT_CONFIG_ERROR
+                if (
+                    args.usefulness is not None
+                    and (isinstance(args.usefulness, bool)
+                         or not isinstance(args.usefulness, int)
+                         or not 1 <= args.usefulness <= 5)
+                ):
+                    out.write("config error: usefulness 必须是 1-5\n")
+                    return EXIT_CONFIG_ERROR
+                conn.execute("BEGIN")
+                feedback = record_choice_feedback(
+                    conn,
+                    choice.id,
+                    args.decision,
+                    args.reason,
+                    audience=args.audience,
+                    angle=args.angle,
+                    usefulness=args.usefulness,
+                    published_url=args.published_url,
+                )
+                new_status = "published" if args.decision == "adopted" else "parked"
+                repo.update_status(choice.id, new_status)
+                conn.execute("COMMIT")
+                out.write("feedback_id: %s\n" % feedback.id)
+                out.write("choice_status: %s\n" % new_status)
+                return EXIT_OK
+        finally:
+            conn.close()
+    except ValueError as exc:
+        out.write("config error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    return EXIT_OK
+
+
 def main(argv: Optional[list] = None, out=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -1565,6 +1697,8 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_research(args, stream)
     if args.command == "official":
         return cmd_official(args, stream)
+    if args.command == "choice":
+        return cmd_choice(args, stream)
     if args.command == "editorial":
         return cmd_editorial(args, stream)
     if args.command == "content":

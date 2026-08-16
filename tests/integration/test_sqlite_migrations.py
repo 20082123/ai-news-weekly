@@ -46,6 +46,7 @@ _EXPECTED_TABLES = (
     "research_fact",
     "editorial_decision",
     "official_announcement_candidate",
+    "creator_choice",
 )
 
 
@@ -462,6 +463,46 @@ class MigrationsTest(unittest.TestCase):
             "0005_github_discovery_policy.sql",
             "0006_event_candidate.sql",
             "0007_research_and_editorial.sql",
+        ):
+            shutil.copy2(real_dir / name, old_dir)
+        db2 = os.path.join(self.tmp, "upgrade.db")
+        original = S._MIGRATIONS_DIR
+        S._MIGRATIONS_DIR = old_dir
+        try:
+            S.initialize_database(db2)
+        finally:
+            S._MIGRATIONS_DIR = original
+        status2 = S.initialize_database(db2)
+        self.assertEqual(status2["latest_applied"], self._target())
+        S.initialize_database(db2)
+        with S.connect(db2) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM schema_migration").fetchone()[0]
+        self.assertEqual(count, self._total())
+
+    def test_migration_0009_applies_on_fresh_and_upgrade(self):
+        # Fresh database: all nine migrations apply in order.
+        status = S.initialize_database(self.db)
+        self.assertEqual(status["latest_applied"], self._target())
+        with S.connect(self.db) as conn:
+            names = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+        self.assertIn("creator_choice", names)
+
+        # Upgrade path: a database frozen at 0008 upgrades cleanly to 0009.
+        old_dir = pathlib.Path(self.tmp) / "old8"
+        old_dir.mkdir()
+        real_dir = pathlib.Path(S._MIGRATIONS_DIR)
+        for name in (
+            "0001_initial.sql",
+            "0002_source_collection.sql",
+            "0003_raw_signal_observation.sql",
+            "0004_candidate_qualification.sql",
+            "0005_github_discovery_policy.sql",
+            "0006_event_candidate.sql",
+            "0007_research_and_editorial.sql",
+            "0008_official_announcement.sql",
         ):
             shutil.copy2(real_dir / name, old_dir)
         db2 = os.path.join(self.tmp, "upgrade.db")

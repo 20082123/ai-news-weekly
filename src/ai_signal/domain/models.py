@@ -1692,3 +1692,54 @@ class OfficialAnnouncementCandidate:
         if self.updated_at is None:
             object.__setattr__(self, "updated_at", self.created_at)
         _normalize_datetimes(self, ("created_at", "updated_at"))
+
+
+# --------------------------------------------------------------------------- #
+# Creator choice (migration 0009, the creator-centric hub)
+# --------------------------------------------------------------------------- #
+CREATOR_CHOICE_STATUSES = ("chosen", "researched", "drafted", "published", "parked")
+
+
+def creator_choice_entity_id(week_key: str, subject: str) -> str:
+    """Deterministic identity of one weekly creator choice."""
+    return deterministic_id("creator-choice", week_key, subject)
+
+
+@dataclass(frozen=True)
+class CreatorChoice:
+    """One creator choice: what the human wants to write this week.
+
+    The hub of the system is THIS row, not the event pile: research, gap
+    routing and drafts serve the choice. ``event_candidate_id`` optionally
+    links the choice to an aggregated event when one exists.
+    """
+
+    week_key: str
+    subject: str
+    status: str = "chosen"
+    event_candidate_id: Optional[str] = None
+    chosen_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if not str(self.week_key).strip():
+            raise ValueError("week_key must not be empty")
+        if not isinstance(self.subject, str) or not self.subject.strip():
+            raise ValueError("subject must be a non-empty string")
+        object.__setattr__(self, "subject", self.subject.strip())
+        if self.status not in CREATOR_CHOICE_STATUSES:
+            raise ValueError("invalid creator choice status: %r" % self.status)
+        if self.event_candidate_id is not None and not self.event_candidate_id:
+            raise ValueError("event_candidate_id must be a non-empty string or None")
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                creator_choice_entity_id(self.week_key, self.subject),
+            )
+        if self.chosen_at is None:
+            object.__setattr__(self, "chosen_at", now_utc())
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.chosen_at)
+        _normalize_datetimes(self, ("chosen_at", "updated_at"))

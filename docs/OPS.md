@@ -12,6 +12,29 @@ $env:PYTHONPATH = "src"
 
 ---
 
+## 动作 0：以你的选题为圆心（DEC-017，优先于一切自动化）
+
+```powershell
+# 1) 你挑一个想写的（一句话也行），登记：
+python -m ai_signal choice pick --db-path ./.ai-signal/ai_signal.db `
+  --week-key 2026-W33 --subject "DeepSeek 涨价" [--event-id <关联事件id>]
+
+# 2) 看证据缺口清单（哪些窟窿、找哪个源、怎么补）：
+python -m ai_signal choice gaps --db-path ./.ai-signal/ai_signal.db `
+  --week-key 2026-W33 --subject "DeepSeek 涨价"
+
+# 3) 按缺口补源（见动作 2/3/4），够了就停；然后研究/判定/出稿（动作 2 的后半）
+
+# 4) 发布后记反馈（adopted / parked / rejected）：
+python -m ai_signal choice feedback --db-path ./.ai-signal/ai_signal.db `
+  --week-key 2026-W33 --subject "DeepSeek 涨价" `
+  --decision adopted --reason "数据不错，继续这类" --usefulness 5 `
+  [--published-url "https://..."]
+```
+
+原则：**圆心是你的选择，不是事件堆**。每周采集（动作 1）只是候选供货，
+不是主流程；Reddit/X 只在某个选题的缺口打开时才去（动作 3）。
+
 ## 动作 1：本周全流程（发现 → 研究 → 判定 → Brief）
 
 ```powershell

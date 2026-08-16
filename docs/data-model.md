@@ -500,6 +500,24 @@ visibly and unsafe entry links are skipped. Manual Reddit/X/user-reality
 evidence enters dossiers through `research add-note` as `research_fact`
 rows with `source_kind = manual` (verbatim quotes, one URL each).
 
+## Phase DEC-017: creator choice registry (migration 0009)
+
+Migration `0009_creator_choice.sql` adds the creator-centric hub (purely
+additive; 0001-0008 are immutable). The system's hub is the CREATOR'S
+weekly choice, not the event pile.
+
+### `creator_choice`
+
+One row per `(week_key, subject)` (`UNIQUE`; the id is
+`deterministic_id("creator-choice", week_key, subject)`). Fields: `subject`
+(what the human wants to write), `event_candidate_id` (optional link to an
+aggregated event), `status` (`chosen | researched | drafted | published |
+parked`). Evidence-gap routing (`discovery/gap_routing.py`) maps each
+uncovered gap to exactly one source (official / github / reddit / x /
+human); the agent executes the routing, the system never scrapes social
+platforms itself. Published outcomes reuse the generic `feedback` table
+with `target_type = creator_choice` (`adopted | parked | rejected`).
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes

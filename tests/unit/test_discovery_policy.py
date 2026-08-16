@@ -251,7 +251,7 @@ class CatalogTest(unittest.TestCase):
         # DRAFT first-user lists (2026-08-16): the engineering shape is
         # locked; only these catalog entries remain to be confirmed/swapped.
         watchlist = get_policy("watchlist-v1")
-        self.assertEqual(len(watchlist.probes), 5)
+        self.assertEqual(len(watchlist.probes), 6)
         for probe in watchlist.probes:
             self.assertEqual(probe.kind, "watchlist_target")
             self.assertIn("/", probe.spec["full_name"])

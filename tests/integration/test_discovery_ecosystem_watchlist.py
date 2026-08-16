@@ -342,11 +342,12 @@ class WatchlistEcosystemTest(unittest.TestCase):
             clock=lambda: _utc(CLOCK),
         )
         self.assertEqual(result.status, "success")
-        self.assertEqual(result.probes_total, 5)
-        self.assertEqual(result.research, 5)
-        self.assertEqual(result.selections_total, 5)
-        self.assertEqual(result.queued, 5)  # budget is 5
-        self.assertEqual(len(transport.calls), 5)
+        self.assertEqual(result.probes_total, 6)
+        self.assertEqual(result.research, 6)
+        self.assertEqual(result.selections_total, 6)
+        self.assertEqual(result.queued, 5)       # budget is 5
+        self.assertEqual(result.over_budget, 1)  # the 6th research candidate
+        self.assertEqual(len(transport.calls), 6)
         conn = S._open(self.db)
         try:
             probe_kinds = {
