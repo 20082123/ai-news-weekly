@@ -10,6 +10,9 @@
 |---|---|---|---|---|
 | [GS-06](GS-06-deepseek-v4-pricing.md) | DeepSeek V4 峰谷涨价（8-16 生效） | Economics | ready_to_write | 待判 |
 | [GS-12](GS-12-hax-v0.3.0.md) | hax v0.3.0 设计取舍 / 体验宣称 | Tool/Workflow | A=ready_to_write, B=needs_testing | 初判：不吸引（见档案内记录） |
+| [GS-21](GS-21-ai-agent-book.md) | 《深入理解 AI Agent》开源教材 | Tool/Workflow | 机器 needs_testing → 人工 ready_to_write（Gate 盲区记录） | 第一用户已确认"想写"，报道向 |
+
+## 标注填写表（20 个候选）
 
 ## 标注填写表（20 个候选）
 
