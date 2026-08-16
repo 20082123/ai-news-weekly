@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "src"))
@@ -107,11 +108,22 @@ class _WeeklyFakeTransport:
             full_name = parts[1] + "/" + parts[2]
             repo_id = 100 + abs(hash(full_name)) % 100
             body = json.dumps(_repo_item(repo_id, full_name=full_name)).encode("utf-8")
+        elif path.endswith(".xml"):
+            body = (
+                '<?xml version="1.0"?><rss version="2.0"><channel><title>F</title>'
+                "<item><title>官方公告</title><link>https://example.com/ann</link>"
+                "<pubDate>Fri, 15 Aug 2026 09:00:00 GMT</pubDate>"
+                "<description>&lt;p&gt;公告摘要&lt;/p&gt;</description></item>"
+                "</channel></rss>"
+            ).encode("utf-8")
         else:
             raise RuntimeError("unexpected path")
+        content_type = (
+            "application/rss+xml" if path.endswith(".xml") else "application/json"
+        )
         return HttpResponse(
             status=200,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": content_type},
             body=body,
             final_url="https://api.github.com" + path,
         )
@@ -292,19 +304,34 @@ class WeeklyPipelineTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_weekly_end_to_end(self):
+        from ai_signal.discovery.official_catalog import OfficialSourceSpec
+
         transport = _WeeklyFakeTransport()
-        report = run_weekly(
-            self.db,
-            "2026-W33",
-            allow_network=True,
-            output_root=self.out,
-            allow_output_write=True,
-            research_limit=2,
-            transport_factory=lambda: transport,
-        )
+        with mock.patch(
+            "ai_signal.discovery.official_catalog.OFFICIAL_SOURCES",
+            (
+                OfficialSourceSpec(
+                    name="test-feed",
+                    feed_url="https://example.com/feed.xml",
+                    site_url="https://example.com",
+                ),
+            ),
+        ):
+            report = run_weekly(
+                self.db,
+                "2026-W33",
+                allow_network=True,
+                output_root=self.out,
+                allow_output_write=True,
+                research_limit=2,
+                transport_factory=lambda: transport,
+            )
         self.assertEqual(report.discovery_policies, 4)
         self.assertEqual(report.discovery_success, 4)
         self.assertEqual(report.discovery_degraded, 0)
+        # Official sensor: one fake feed, one safe entry collected.
+        self.assertEqual(report.official_created, 1)
+        self.assertEqual(report.official_sources_failed, 0)
         self.assertGreaterEqual(report.promoted, 1)
         self.assertEqual(report.research_attempted, 2)
         self.assertEqual(report.dossiers_built, 2)

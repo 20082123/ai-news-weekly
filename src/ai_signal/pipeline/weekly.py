@@ -15,13 +15,15 @@ research failures are recorded in the report, never silently swallowed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from ..discovery.policy import POLICY_CATALOG, list_policies
+from ..discovery import official_catalog as catalog_module
+from ..discovery.policy import list_policies
 from ..discovery.run import run_github_discovery
 from ..pipeline.editorial import decide_editorial
 from ..pipeline.event_candidate import promote_github_queue
+from ..pipeline.official_discovery import collect_official_announcements
 from ..pipeline.research import build_github_dossier
 from ..storage import sqlite as sqlite_storage
 from ..storage.event_candidate_repositories import EventCandidateRepository
@@ -40,6 +42,8 @@ class WeeklyRunReport:
     discovery_policies: int
     discovery_success: int
     discovery_degraded: int
+    official_created: int
+    official_sources_failed: int
     promoted: int
     already_promoted: int
     research_attempted: int
@@ -105,6 +109,29 @@ def run_weekly(
             discovery_success += 1
         else:
             discovery_degraded += 1
+
+    # 1.5 Official announcements (consumer-level changes surface here).
+    official_created = 0
+    official_sources_failed = 0
+    try:
+        conn = sqlite_storage._open(db_path)
+        try:
+            conn.execute("BEGIN")
+            off_result = collect_official_announcements(
+                conn,
+                allow_network=True,
+                transport_factory=transport_factory,
+                clock=clock,
+                timeout_seconds=timeout_seconds,
+            )
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
+        official_created = off_result.created
+        official_sources_failed = off_result.sources_failed
+    except Exception:  # noqa: BLE001 - official sensor failure never blocks the week
+        official_created = 0
+        official_sources_failed = len(tuple(catalog_module.OFFICIAL_SOURCES))
 
     # 2. Promote queued candidates into event-candidate drafts.
     conn = sqlite_storage._open(db_path)
@@ -223,6 +250,8 @@ def run_weekly(
         discovery_policies=len(list_policies()),
         discovery_success=discovery_success,
         discovery_degraded=discovery_degraded,
+        official_created=official_created,
+        official_sources_failed=official_sources_failed,
         promoted=promo.promoted,
         already_promoted=promo.already_promoted,
         research_attempted=research_attempted,

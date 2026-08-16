@@ -166,3 +166,55 @@ class OfficialHttpClient:
         if "text/html" not in lowered and "text/plain" not in lowered:
             raise OfficialHttpError(ERR_INVALID_CONTENT)
         return _strip_to_text(bytes(response.body), self._text_cap)
+
+
+def strip_html(body: bytes, cap: int) -> str:
+    """Public tag-stripping helper (also used by RSS parsing)."""
+    return _strip_to_text(body, cap)
+
+
+class OfficialRssClient:
+    """Fetch one official RSS/Atom feed as bounded raw XML bytes.
+
+    Same posture as :class:`OfficialHttpClient` (https only, bounded,
+    redirect-safe); the XML is parsed by the CALLER with stdlib
+    ``xml.etree`` - this client only returns raw bytes. Feeds are untrusted
+    input: the caller must cap text and reject unsafe entry links.
+    """
+
+    def __init__(
+        self,
+        transport: OfficialHttpTransport,
+        *,
+        timeout_seconds: int = 10,
+        max_response_bytes: int = 1024 * 1024,
+    ) -> None:
+        self._transport = transport
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
+            raise ValueError("timeout_seconds must be an integer")
+        if not 1 <= timeout_seconds <= 30:
+            raise ValueError("timeout_seconds must be between 1 and 30")
+        self._timeout_seconds = timeout_seconds
+        if not isinstance(max_response_bytes, int) or max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
+        self._max_response_bytes = max_response_bytes
+
+    def fetch(self, url: str) -> bytes:
+        if not _is_clean_https(url):
+            raise OfficialHttpError(ERR_UNSAFE_URL)
+        response = self._transport.get(
+            url, _DEFAULT_HEADERS, self._timeout_seconds, self._max_response_bytes
+        )
+        if not _is_clean_https(response.final_url):
+            raise OfficialHttpError(ERR_UNSAFE_URL)
+        if len(response.body) > self._max_response_bytes:
+            raise OfficialHttpError(ERR_TOO_LARGE)
+        content_type = ""
+        for key, value in (response.headers or {}).items():
+            if str(key).lower() == "content-type":
+                content_type = str(value or "")
+                break
+        lowered = content_type.lower()
+        if "xml" not in lowered and "rss" not in lowered and "atom" not in lowered:
+            raise OfficialHttpError(ERR_INVALID_CONTENT)
+        return bytes(response.body)

@@ -286,6 +286,19 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required gate for the official page fetch",
     )
+    p_res_note = res_sub.add_parser(
+        "add-note",
+        help="attach manually quoted evidence (Reddit/X/user reality) to the "
+        "latest dossier - no fetch, text is stored verbatim",
+    )
+    p_res_note.add_argument("--db-path", dest="db_path", required=True)
+    p_res_note.add_argument("--event-id", dest="event_id", required=True)
+    p_res_note.add_argument("--text", required=True)
+    p_res_note.add_argument("--url", dest="url")
+    p_res_note.add_argument(
+        "--kind", default="fact",
+        help="fact | official_claim | contradiction | unknown",
+    )
 
     # editorial (2E) ----------------------------------------------------------
     p_ed = sub.add_parser("editorial", help="editorial decisions (phase 2E)")
@@ -330,6 +343,29 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="optional: also write content brief files",
     )
+
+    # official (2D3-B) ---------------------------------------------------------
+    p_off = sub.add_parser(
+        "official", help="official announcement sensor (phase 2D3-B)"
+    )
+    off_sub = p_off.add_subparsers(dest="official_command", required=True)
+    p_off_collect = off_sub.add_parser(
+        "collect", help="collect first-party announcements from official feeds"
+    )
+    p_off_collect.add_argument("--db-path", dest="db_path", required=True)
+    p_off_collect.add_argument("--timeout", type=int, default=10)
+    p_off_collect.add_argument(
+        "--allow-network",
+        dest="allow_network",
+        action="store_true",
+        help="required gate for feed fetches",
+    )
+    p_off_list = off_sub.add_parser(
+        "list", help="list official announcement candidates (safe summary)"
+    )
+    p_off_list.add_argument("--db-path", dest="db_path", required=True)
+    p_off_list.add_argument("--status", dest="status")
+    p_off_list.add_argument("--limit", type=int, default=30)
     return parser
 
 
@@ -1103,6 +1139,51 @@ def cmd_research(args, out) -> int:
             and all(ch in "0123456789abcdef" for ch in value)
         )
 
+    if args.research_command == "add-note":
+        from .domain.models import ResearchFact
+        from .storage.research_repositories import ResearchFactRepository
+
+        if not _hex64(args.event_id):
+            out.write("config error: invalid event id\n")
+            return EXIT_CONFIG_ERROR
+        if args.kind not in ("fact", "official_claim", "contradiction", "unknown"):
+            out.write("config error: invalid fact kind\n")
+            return EXIT_CONFIG_ERROR
+        try:
+            sqlite_storage.initialize_database(args.db_path)
+            conn = sqlite_storage._open(args.db_path)
+            try:
+                dossiers = ResearchDossierRepository(conn).list_for_event(args.event_id)
+                if not dossiers:
+                    out.write("no dossier for this event\n")
+                    return EXIT_CONFIG_ERROR
+                conn.execute("BEGIN")
+                fact = ResearchFactRepository(conn).insert_or_get(ResearchFact(
+                    dossier_id=dossiers[0].id,
+                    kind=args.kind,
+                    text=args.text,
+                    source_kind="manual",
+                    source_url=args.url,
+                ))
+                conn.execute("COMMIT")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+        except ValueError as exc:
+            out.write("config error: %s\n" % exc)
+            return EXIT_CONFIG_ERROR
+        except sqlite_storage.StorageError:
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        out.write("fact_id: %s\n" % fact.id)
+        out.write("kind: %s\n" % fact.kind)
+        return EXIT_OK
+
     if args.research_command == "add-evidence":
         from .pipeline.research import attach_official_evidence
         from .sources.official_http import OfficialHttpError
@@ -1241,6 +1322,79 @@ def cmd_research(args, out) -> int:
     return EXIT_OK
 
 
+def cmd_official(args, out) -> int:
+    from pathlib import Path
+
+    from .pipeline.collect import CollectionPolicyError
+    from .pipeline.official_discovery import collect_official_announcements
+    from .storage import sqlite as sqlite_storage
+    from .storage.official_repositories import (
+        OfficialAnnouncementCandidateRepository,
+    )
+
+    if args.official_command == "list":
+        if not Path(args.db_path).exists():
+            out.write("database does not exist\n")
+            return EXIT_DB_ERROR
+        try:
+            sqlite_storage.initialize_database(args.db_path)
+            with sqlite_storage.connect(args.db_path) as conn:
+                rows = OfficialAnnouncementCandidateRepository(conn).list(
+                    args.status, args.limit
+                )
+        except ValueError as exc:
+            out.write("config error: %s\n" % exc)
+            return EXIT_CONFIG_ERROR
+        except sqlite_storage.StorageError:
+            out.write("database error\n")
+            return EXIT_DB_ERROR
+        for row in rows:
+            out.write(
+                "[%s] %s | %s | %s\n"
+                % (row.source_name, row.published_at[:10],
+                   row.title[:80], row.url[:70])
+            )
+        return EXIT_OK
+
+    # collect
+    if isinstance(args.timeout, bool) or not isinstance(args.timeout, int) or not 1 <= args.timeout <= 30:
+        out.write("invalid timeout\n")
+        return EXIT_CONFIG_ERROR
+    try:
+        sqlite_storage.initialize_database(args.db_path)
+        conn = sqlite_storage._open(args.db_path)
+        try:
+            conn.execute("BEGIN")
+            result = collect_official_announcements(
+                conn,
+                allow_network=bool(args.allow_network),
+                timeout_seconds=args.timeout,
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+    except CollectionPolicyError as exc:
+        out.write("policy error: %s\n" % exc)
+        return EXIT_SECURITY
+    except sqlite_storage.StorageError:
+        out.write("database error\n")
+        return EXIT_DB_ERROR
+    out.write("sources_attempted: %d\n" % result.sources_attempted)
+    out.write("sources_failed: %d\n" % result.sources_failed)
+    out.write("created: %d\n" % result.created)
+    out.write("existing: %d\n" % result.existing)
+    out.write("skipped_unsafe: %d\n" % result.skipped_unsafe)
+    if result.sources_failed == result.sources_attempted:
+        return EXIT_CAPABILITY
+    return EXIT_OK
+
+
 def cmd_editorial(args, out) -> int:
     from pathlib import Path
 
@@ -1364,6 +1518,8 @@ def cmd_weekly(args, out) -> int:
     out.write("discovery_policies: %d\n" % report.discovery_policies)
     out.write("discovery_success: %d\n" % report.discovery_success)
     out.write("discovery_degraded: %d\n" % report.discovery_degraded)
+    out.write("official_created: %d\n" % report.official_created)
+    out.write("official_sources_failed: %d\n" % report.official_sources_failed)
     out.write("promoted: %d\n" % report.promoted)
     out.write("already_promoted: %d\n" % report.already_promoted)
     out.write("research_attempted: %d\n" % report.research_attempted)
@@ -1407,6 +1563,8 @@ def main(argv: Optional[list] = None, out=None) -> int:
         return cmd_event_candidate(args, stream)
     if args.command == "research":
         return cmd_research(args, stream)
+    if args.command == "official":
+        return cmd_official(args, stream)
     if args.command == "editorial":
         return cmd_editorial(args, stream)
     if args.command == "content":

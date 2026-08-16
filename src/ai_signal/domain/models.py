@@ -1629,3 +1629,66 @@ class EditorialDecision:
         if self.decided_at is None:
             object.__setattr__(self, "decided_at", now_utc())
         _normalize_datetimes(self, ("decided_at",))
+
+
+# --------------------------------------------------------------------------- #
+# Official announcement candidate (phase 2D3-B, official sensor)
+# --------------------------------------------------------------------------- #
+OFFICIAL_CANDIDATE_STATUSES = ("new", "researched", "rejected")
+
+
+def official_announcement_candidate_entity_id(source_name: str, url: str) -> str:
+    """Deterministic identity of one official announcement."""
+    return deterministic_id("official-announcement", source_name, url)
+
+
+@dataclass(frozen=True)
+class OfficialAnnouncementCandidate:
+    """One first-party announcement candidate from an official feed/page.
+
+    The identity is ``(source_name, url)``: re-collecting the same entry is
+    idempotent. ``summary`` is a cleaned, capped excerpt of untrusted feed
+    text; ``url`` must be a clean https first-party link.
+    """
+
+    source_name: str
+    title: str
+    url: str
+    published_at: str
+    summary: str
+    status: str = "new"
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.source_name, str)
+            or not self.source_name.strip()
+            or len(self.source_name) > 64
+        ):
+            raise ValueError("source_name must be a non-empty label (<=64 chars)")
+        object.__setattr__(self, "source_name", self.source_name.strip())
+        for name in ("title", "summary", "published_at"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("%s must be a non-empty string" % name)
+            object.__setattr__(self, name, value.strip())
+        object.__setattr__(
+            self, "url", _validate_evidence_url(self.url, "url")
+        )
+        if self.status not in OFFICIAL_CANDIDATE_STATUSES:
+            raise ValueError("invalid official candidate status: %r" % self.status)
+        if self.id == "":
+            object.__setattr__(
+                self,
+                "id",
+                official_announcement_candidate_entity_id(
+                    self.source_name, self.url
+                ),
+            )
+        if self.created_at is None:
+            object.__setattr__(self, "created_at", now_utc())
+        if self.updated_at is None:
+            object.__setattr__(self, "updated_at", self.created_at)
+        _normalize_datetimes(self, ("created_at", "updated_at"))
