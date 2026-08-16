@@ -88,8 +88,14 @@ Golden Set：4+1 份档案（GS-01/06/07/12/21）+ 20 行候选标注表，
   清单已生成；
 - DEC-018：反馈两轮化（0010 三列）+ `feedback sync --content-dir` 接通选题卡
   （修掉“sync 只认 material_pack”的断头路）+ 官网定性为词典 + 输出根目录
-  指向 Obsidian；602 项测试全绿；
-- 修复 `choice list` 无 week-key 崩溃（回归测试 2 个）。
+  指向 Obsidian；
+- 修复 `choice list` 无 week-key 崩溃（回归测试 2 个）；
+- DEC-019：发布路径（小红书先行 / 并存 / 复制粘贴）+ 第一条已发布，
+  两轮反馈共 3 行落库，选题中枢状态 published；
+- DEC-020：V1 里程碑（本地+远端标签 `v1.0.0`，分支已推送 origin，
+  main 与 V0 周报零改动）；
+- DEC-021：平台发布模板（`content prompt-pack` / `content platform-draft`，
+  小红书注册表 + 骨架稿 + 配图清单），625 测试全绿。
 
 ### Next
 

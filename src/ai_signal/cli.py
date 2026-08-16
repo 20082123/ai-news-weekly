@@ -330,6 +330,28 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required gate to write brief files",
     )
+    # content prompt-pack / platform-draft (DEC-021 publishing templates)
+    p_ct_pack = ct_sub.add_parser(
+        "prompt-pack", help="assemble the guardrail prompt pack (DEC-021)"
+    )
+    p_ct_plat = ct_sub.add_parser(
+        "platform-draft", help="render a platform skeleton draft (DEC-021)"
+    )
+    for sub_parser in (p_ct_pack, p_ct_plat):
+        sub_parser.add_argument("--db-path", dest="db_path", required=True)
+        sub_parser.add_argument("--event-id", dest="event_id", required=True)
+        sub_parser.add_argument("--week-key", dest="week_key", required=True)
+        sub_parser.add_argument("--output-root", dest="output_root", required=True)
+        sub_parser.add_argument(
+            "--platform", dest="platform", default="xiaohongshu",
+            help="platform template key (default: xiaohongshu)",
+        )
+        sub_parser.add_argument(
+            "--allow-output-write",
+            dest="allow_output_write",
+            action="store_true",
+            help="required gate to write draft files",
+        )
 
     # weekly (Phase 3) --------------------------------------------------------
     p_wk = sub.add_parser("weekly", help="weekly end-to-end run (Phase 3)")
@@ -1478,6 +1500,12 @@ def cmd_content(args, out) -> int:
     from pathlib import Path
 
     from .outputs.content_brief import ContentBriefError, publish_content_brief
+    from .outputs.platform_drafts import (
+        DraftPublishError,
+        publish_platform_skeleton,
+        publish_prompt_pack,
+    )
+    from .outputs.platform_templates import PlatformTemplateError
     from .storage import sqlite as sqlite_storage
     from .storage.event_candidate_repositories import EventCandidateRepository
     from .storage.research_repositories import (
@@ -1516,12 +1544,26 @@ def cmd_content(args, out) -> int:
         out.write("database error\n")
         return EXIT_DB_ERROR
     try:
-        path = publish_content_brief(
-            Path(args.output_root), args.week_key, event, dossier, facts, decision
-        )
-    except ContentBriefError:
+        if args.content_command == "prompt-pack":
+            path = publish_prompt_pack(
+                Path(args.output_root), args.week_key, event, dossier,
+                facts, decision, args.platform,
+            )
+        elif args.content_command == "platform-draft":
+            path = publish_platform_skeleton(
+                Path(args.output_root), args.week_key, event, dossier,
+                facts, decision, args.platform,
+            )
+        else:
+            path = publish_content_brief(
+                Path(args.output_root), args.week_key, event, dossier, facts, decision
+            )
+    except (ContentBriefError, DraftPublishError):
         out.write("output error\n")
         return EXIT_CAPABILITY
+    except PlatformTemplateError as exc:
+        out.write("config error: %s\n" % exc)
+        return EXIT_CONFIG_ERROR
     out.write("written: %s\n" % path.name)
     return EXIT_OK
 
