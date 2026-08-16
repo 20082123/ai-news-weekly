@@ -525,7 +525,15 @@ class MaterialPack:
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Feedback:
-    """A human decision on a signal/event/claim/pack."""
+    """A human decision on a signal/event/claim/pack/brief.
+
+    Two rounds (DEC-018): round 1 is the topic judgement
+    (``decision/reason/audience/angle/usefulness``, optional), round 2 is the
+    published outcome (``published_url/published_at/outcome/lesson``,
+    required after publishing). The deterministic id covers all filled
+    fields, so a later round-2 fill creates a NEW row instead of mutating
+    the round-1 row - judgement evolution stays auditable.
+    """
 
     target_type: str
     target_id: str
@@ -536,6 +544,9 @@ class Feedback:
     angle: Optional[str] = None
     usefulness: Optional[int] = None
     published_url: Optional[str] = None
+    published_at: Optional[str] = None
+    outcome: Optional[str] = None
+    lesson: Optional[str] = None
     policy_version_id: Optional[str] = None
     id: str = ""
 
@@ -549,6 +560,8 @@ class Feedback:
                 raise TypeError("usefulness must be an integer between 1 and 5")
             if not (1 <= self.usefulness <= 5):
                 raise ValueError("usefulness must be between 1 and 5")
+        if self.published_at is not None and not is_iso_date(self.published_at):
+            raise ValueError("published_at must be an ISO date YYYY-MM-DD")
         if self.id == "":
             object.__setattr__(self, "id", generate_run_id())
         _normalize_datetimes(self, ("created_at",))
@@ -1703,6 +1716,28 @@ CREATOR_CHOICE_STATUSES = ("chosen", "researched", "drafted", "published", "park
 def creator_choice_entity_id(week_key: str, subject: str) -> str:
     """Deterministic identity of one weekly creator choice."""
     return deterministic_id("creator-choice", week_key, subject)
+
+
+# --------------------------------------------------------------------------- #
+# Content brief (migration 0010, DEC-018 two-round feedback)
+# --------------------------------------------------------------------------- #
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def is_iso_date(value) -> bool:
+    """True for a real ISO calendar date like ``2026-08-20``."""
+    if not isinstance(value, str) or not _ISO_DATE_RE.match(value):
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def content_brief_entity_id(week_key: str, event_candidate_id: str) -> str:
+    """Deterministic identity of one content brief (week + event)."""
+    return deterministic_id("content-brief", week_key, event_candidate_id)
 
 
 @dataclass(frozen=True)

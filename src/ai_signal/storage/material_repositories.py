@@ -513,8 +513,9 @@ class FeedbackRepository:
             self.conn,
             "INSERT INTO feedback "
             "(id, target_type, target_id, decision, reason, audience, angle, "
-            " usefulness, published_url, created_at, policy_version_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " usefulness, published_url, published_at, outcome, lesson, "
+            " created_at, policy_version_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 feedback.id,
                 feedback.target_type,
@@ -525,6 +526,9 @@ class FeedbackRepository:
                 feedback.angle,
                 feedback.usefulness,
                 feedback.published_url,
+                feedback.published_at,
+                feedback.outcome,
+                feedback.lesson,
                 _iso(feedback.created_at),
                 feedback.policy_version_id,
             ),
@@ -533,6 +537,17 @@ class FeedbackRepository:
         return feedback
 
     def target_exists(self, target_type: str, target_id: str) -> bool:
+        if target_type == "content_brief":
+            # DEC-018: a brief is anchored to its event candidate. Callers
+            # pass the EVENT id here (the stored Feedback target_id is the
+            # deterministic brief id, checked by the sync layer itself).
+            row = _safe_execute(
+                self.conn,
+                "SELECT 1 FROM event_candidate WHERE id = ?",
+                (target_id,),
+                "feedback target check",
+            ).fetchone()
+            return row is not None
         if target_type != "material_pack":
             return False
         row = _safe_execute(

@@ -328,6 +328,10 @@ GitHub 已实现，是最便宜的下一个纵切；但继续扩展 GitHub 会�
 - Reddit/X 的实时可用性依赖 agent-reach 后端（Chrome + OpenCLI 扩展或
   twitter-cli/rdt-cli 登录态）。
 
+> **更新（DEC-018，2026-08-16）**：官方源的角色细化为「词典不是雷达」——
+> 发现靠第一用户本人 + GitHub 辅助，`official collect` 降级为被动备份，
+> feed 清单不再是要确认的关键路径；手工引文入口（add-note）不变。
+
 ## DEC-017：系统的圆心是“你这周写什么”，不是事件堆
 
 - **日期**：2026-08-15
@@ -364,3 +368,40 @@ GitHub 已实现，是最便宜的下一个纵切；但继续扩展 GitHub 会�
 - DEC-012：自动进化的启动条件。
 
 一旦确认，把状态改为 `accepted`，并在条目中记录确认日期。若被新决定替代，标记 `superseded` 并链接新条目。
+
+## DEC-018：官网是词典不是雷达；反馈分两轮；输出落进 Obsidian
+
+- **日期**：2026-08-16
+- **状态**：`accepted`
+
+### 决定
+
+1. 官方源的定位从「发现雷达」改为「按需查证词典」：发现靠第一用户本人
+   （+GitHub 四车道辅助），需要权威数字时由代理对具体方面打官网
+   （`research add-evidence --url <官方页> --kind official_claim`）；
+   `official collect`（RSS 扫描）降级为可有可无的被动备份，feed 清单
+   不再需要维护确认；缺口路由 official_confirmation 措辞同步更新。
+2. 人工反馈分两轮：第一轮选题判断（decision/reason/audience/angle/
+   usefulness，读卡后判断，可填可不填）；第二轮发布结果（published_url/
+   published_at/outcome/lesson，发布几天后必填）。两轮都落在 feedback
+   表（0010 新增三列），确定性 ID 覆盖全部已填字段——后补第二轮生成
+   新行而不是改旧行，判断演变可审计。
+3. 反馈通道接通选题卡：`feedback sync --content-dir` 扫描 Content
+   目录的 content-brief 文件（brief_id = 确定性(周+事件)），修掉 2B 时代
+   「sync 只认 material_pack」的断头路。
+4. 生产输出根目录指向 Obsidian Vault（`AI Signal/Content/`），编辑、
+   填反馈、欠账清单（Dataview）都在 Obsidian 完成；系统零依赖。
+5. 飞书/豆包暂缓：飞书是以后的分发放大器，豆包是以后的初稿改写工具，
+   都要等发布闭环先跑起来再评估。
+
+### 原因
+
+「官网按需查证」对准差异化（数字全对）而非先知道（发现本来就是人的手艺）；
+两轮反馈分别校准选题框架与真实受众，第一轮便宜量大、第二轮贵而决定性；
+Obsidian 是 Markdown+YAML 的母语环境，接入成本为零。
+
+### 后果与代价
+
+- feedback 表 +3 列（0010），sync 支持双目标类型与双目录；
+- 选题卡 frontmatter 增加 9 个反馈字段与 brief_id；
+- 真实 Vault 的首次写入仍需第一用户批准（AGENTS.md 硬约束）。

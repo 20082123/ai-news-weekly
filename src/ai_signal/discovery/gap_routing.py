@@ -14,7 +14,9 @@ GAP_ROUTING = {
     "official_confirmation": (
         "官方确认",
         "official",
-        "官方公告/RSS/官方页面（official collect / research add-evidence）",
+        # DEC-018: official sites are a dictionary, not a radar - query the
+        # exact page on demand instead of scanning feeds for discoveries.
+        "官网按需查证（research add-evidence --url 官方页）；official collect 仅被动备份",
     ),
     "technical_implementation": (
         "技术实现与版本",

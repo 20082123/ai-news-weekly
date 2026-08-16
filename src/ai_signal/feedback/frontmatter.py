@@ -39,10 +39,33 @@ _ALLOWED_FIELDS = (
     "angle",
     "usefulness",
     "published_url",
+    # content-brief (2F + DEC-018 two-round feedback)
+    "kind",
+    "event_candidate_id",
+    "dossier_id",
+    "brief_id",
+    "signal_type",
+    "editorial",
+    "published_at",
+    "outcome",
+    "lesson",
 )
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _KV_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$")
+# YAML comment: a '#' preceded by whitespace, or a full line starting with '#'.
+_TRAILING_COMMENT_RE = re.compile(r"^(.*?)\s+#.*$")
+
+
+def _strip_comment(raw_value: str) -> str:
+    """Drop a trailing YAML comment from an unquoted scalar."""
+    value = raw_value.strip()
+    if not value or value[0] in ('"', "'"):
+        return value  # quoted strings keep '#' verbatim
+    if value.startswith("#"):
+        return ""  # key: # comment  -> null value
+    m = _TRAILING_COMMENT_RE.match(value)
+    return m.group(1) if m else value
 
 
 class FrontmatterError(ValueError):
@@ -107,10 +130,12 @@ def parse_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
         line = raw_line.rstrip()
         if line.strip() == "":
             continue
+        if line.lstrip().startswith("#"):
+            continue  # full-line comment
         m = _KV_RE.match(line)
         if not m:
             raise FrontmatterError("line %d: not key: value" % lineno)
-        key, value = m.group(1), m.group(2)
+        key, value = m.group(1), _strip_comment(m.group(2))
         if key not in _ALLOWED_FIELDS:
             raise FrontmatterError("line %d: unknown field %r" % (lineno, key))
         if key in result:

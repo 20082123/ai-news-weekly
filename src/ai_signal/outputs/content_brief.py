@@ -18,7 +18,13 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from ..domain.models import EditorialDecision, EventCandidate, ResearchDossier, ResearchFact
+from ..domain.models import (
+    EditorialDecision,
+    EventCandidate,
+    ResearchDossier,
+    ResearchFact,
+    content_brief_entity_id,
+)
 
 
 class ContentBriefError(Exception):
@@ -51,8 +57,20 @@ def _render_brief(
     lines.append("week_key: %s" % week_key)
     lines.append("event_candidate_id: %s" % event.id)
     lines.append("dossier_id: %s" % dossier.id)
+    lines.append("brief_id: %s" % content_brief_entity_id(week_key, event.id))
     lines.append("signal_type: %s" % event.signal_type)
     lines.append("editorial: %s" % decision.decision)
+    lines.append("# 第一轮反馈（读卡后判断选题，可填可不填）")
+    lines.append("decision: null        # adopted / parked / rejected")
+    lines.append("reason: null          # 为什么，<=500字")
+    lines.append("audience: null        # 你判断的真实受众")
+    lines.append("angle: null           # 你实际用的角度")
+    lines.append("usefulness: null      # 1-5")
+    lines.append("# 第二轮反馈（发布几天后，必填）")
+    lines.append("published_url: null   # 发布后的 https 链接")
+    lines.append("published_at: null    # 发布日期 YYYY-MM-DD")
+    lines.append("outcome: null         # 表现如何：阅读/点赞/收藏/评论，捡你在乎的写")
+    lines.append("lesson: null          # 一句话复盘：下次改什么")
     lines.append("---")
     lines.append("")
     lines.append("# 选题卡：%s" % event.subject)
@@ -146,6 +164,14 @@ def _render_brief(
     lines.append("- 小红书：开头一句结论 + 3 个数字 + 「来源见官方链接」。")
     lines.append("- 抖音：时间线第一项做口播开场，禁说清单做结尾免责。")
     lines.append("- 全部平台：体验型结论只有本人测试完成后才能加入。")
+    lines.append("")
+    lines.append("## 反馈（人填，两轮）")
+    lines.append("")
+    lines.append("- 第一轮（读卡后，可填可不填）：frontmatter 里 decision 选 "
+                "adopted/parked/rejected，可加 reason/audience/angle/usefulness。")
+    lines.append("- 第二轮（发布几天后，必填）：published_url + published_at(YYYY-MM-DD) "
+                "+ outcome（真实表现）+ lesson（一句话复盘）。")
+    lines.append("- 填完跑：feedback sync --content-dir <本目录>（由代理执行），反馈落库。")
     lines.append("")
     return "\n".join(lines)
 

@@ -518,6 +518,32 @@ human); the agent executes the routing, the system never scrapes social
 platforms itself. Published outcomes reuse the generic `feedback` table
 with `target_type = creator_choice` (`adopted | parked | rejected`).
 
+## Phase DEC-018: two-round feedback on content briefs (migration 0010)
+
+Migration `0010_two_round_feedback.sql` adds three nullable TEXT columns
+to `feedback` (purely additive; 0001-0009 are immutable):
+`published_at` (ISO date `YYYY-MM-DD`, validated by real parse),
+`outcome` (free-text result recap, capped at 2000), `lesson` (one-line
+retro, capped at 500).
+
+* Round 1 (topic judgement, optional): `decision`/`reason`/`audience`/
+  `angle`/`usefulness` — same columns as before.
+* Round 2 (published outcome, required after publishing): `published_url`
+  (0001) + the three new columns.
+* The deterministic feedback id covers every filled field, so filling
+  round 2 later creates a NEW row instead of mutating the round-1 row:
+  judgement evolution stays auditable.
+
+### content briefs as feedback targets
+
+`feedback sync --content-dir` scans `kind: content-brief` files. The brief
+identity is `deterministic_id("content-brief", week_key,
+event_candidate_id)` — emitted as `brief_id` in the brief frontmatter and
+recomputed by the sync layer from `week_key` + `event_candidate_id`
+(mismatch = invalid file). The stored `target_id` is the brief id; the
+existence check confirms the referenced event candidate exists. Legacy 2B
+`material_pack` files keep working via `--inbox-dir`.
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes

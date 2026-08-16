@@ -144,9 +144,18 @@ def _build_parser() -> argparse.ArgumentParser:
     # feedback ---------------------------------------------------------------
     p_fb = sub.add_parser("feedback", help="sync human feedback into the database")
     fb_sub = p_fb.add_subparsers(dest="feedback_command", required=True)
-    p_fb_sync = fb_sub.add_parser("sync", help="scan inbox and sync feedback")
+    p_fb_sync = fb_sub.add_parser(
+        "sync", help="scan briefs/inbox and sync two-round feedback (DEC-018)"
+    )
     p_fb_sync.add_argument("--db-path", dest="db_path", required=True)
-    p_fb_sync.add_argument("--inbox-dir", dest="inbox_dir", required=True)
+    p_fb_sync.add_argument(
+        "--inbox-dir", dest="inbox_dir",
+        help="legacy 2B material pack dir (optional)",
+    )
+    p_fb_sync.add_argument(
+        "--content-dir", dest="content_dir",
+        help="content brief dir, e.g. the Obsidian vault Content folder",
+    )
     p_fb_sync.add_argument(
         "--allow-feedback-write",
         dest="allow_feedback_write",
@@ -766,6 +775,9 @@ def cmd_feedback_sync(args, out) -> int:
     if not args.allow_feedback_write:
         out.write("feedback write not allowed: --allow-feedback-write is required\n")
         return EXIT_SECURITY
+    if not args.inbox_dir and not args.content_dir:
+        out.write("need --inbox-dir and/or --content-dir\n")
+        return EXIT_CONFIG_ERROR
 
     try:
         sqlite_storage.initialize_database(args.db_path)
@@ -776,7 +788,11 @@ def cmd_feedback_sync(args, out) -> int:
     conn = sqlite_storage._open(args.db_path)
     try:
         conn.execute("BEGIN")
-        result = sync_feedback(conn, Path(args.inbox_dir))
+        result = sync_feedback(
+            conn,
+            Path(args.inbox_dir) if args.inbox_dir else None,
+            Path(args.content_dir) if args.content_dir else None,
+        )
         conn.execute("COMMIT")
     except sqlite_storage.StorageError:
         try:

@@ -1,6 +1,6 @@
 # OPS — 标准操作手册（代理执行，用户不碰命令行）
 
-> 用户是人，agent 是手。本手册给出六类高频动作的标准命令序列；执行方可以是
+> 用户是人，agent 是手。本手册给出七类高频动作的标准命令序列；执行方可以是
 > Codex / DeepSeek Harness / WorkBuddy 等任何遵守 [AGENTS.md](../AGENTS.md) 的代理。
 
 ```powershell
@@ -8,7 +8,9 @@ cd C:\Users\HP\.codex\worktrees\ba2d\ai-news-weekly
 $env:PYTHONPATH = "src"
 ```
 
-数据库：`./.ai-signal/ai_signal.db`；内容输出：`./.ai-signal/Content/`。
+数据库：`./.ai-signal/ai_signal.db`；开发输出：`./.ai-signal/Content/`。
+生产输出根目录（DEC-018 已定）：Obsidian Vault 的 `AI Signal/Content/`
+（首次写入真实 Vault 仍需第一用户批准，AGENTS.md 硬约束）。
 
 ---
 
@@ -25,7 +27,7 @@ python -m ai_signal choice gaps --db-path ./.ai-signal/ai_signal.db `
 
 # 3) 按缺口补源（见动作 2/3/4），够了就停；然后研究/判定/出稿（动作 2 的后半）
 
-# 4) 发布后记反馈（adopted / parked / rejected）：
+# 4) 发布后记反馈（adopted / parked / rejected，选题级快速判断）：
 python -m ai_signal choice feedback --db-path ./.ai-signal/ai_signal.db `
   --week-key 2026-W33 --subject "DeepSeek 涨价" `
   --decision adopted --reason "数据不错，继续这类" --usefulness 5 `
@@ -34,6 +36,7 @@ python -m ai_signal choice feedback --db-path ./.ai-signal/ai_signal.db `
 
 原则：**圆心是你的选择，不是事件堆**。每周采集（动作 1）只是候选供货，
 不是主流程；Reddit/X 只在某个选题的缺口打开时才去（动作 3）。
+选题卡级的两轮反馈（读卡判断 + 发布结果）走动作 7。
 
 ## 动作 1：本周全流程（发现 → 研究 → 判定 → Brief）
 
@@ -90,7 +93,12 @@ python -m ai_signal research add-note --db-path ./.ai-signal/ai_signal.db `
 # 3) 重新判定并重出 Brief（新修订可审计）
 ```
 
-## 动作 4：官方公告采集（2D3-B）
+## 动作 4：官方公告（DEC-018：官网是词典不是雷达）
+
+- **查证（主路径）**：你提出某方面 → 代理给对应官网页 → 抓回挂进档案：
+  `research add-evidence`（见动作 2）。任何官网都行（OpenAI、DeepSeek、剪映…），
+  不需要维护 feed 清单。
+- **被动备份（可有可无）**：
 
 ```powershell
 python -m ai_signal official collect --db-path ./.ai-signal/ai_signal.db --allow-network
@@ -98,6 +106,7 @@ python -m ai_signal official list --db-path ./.ai-signal/ai_signal.db --limit 20
 ```
 
 源目录：`src/ai_signal/discovery/official_catalog.py`（草稿，替换即生效）。
+RSS 扫描不再是要确认的关键路径，扫到东西算白赚，扫不到不影响主流程。
 
 ## 动作 5：查看队列与档案（只读）
 
@@ -115,6 +124,31 @@ python -m ai_signal official list --db-path ./.ai-signal/ai_signal.db
    初稿要求（结构/语气/长度）；
 3. 交给外部模型出初稿（**系统内不接 LLM 写稿**）；交用户终审；
 4. 样例：`docs/golden-set/GS-21-ai-agent-book.md`。
+
+## 动作 7：两轮反馈回流（DEC-018）
+
+选题卡（`kind: content-brief`）frontmatter 自带 9 个反馈字段，用户在
+Obsidian 里填，代理跑 sync 落库：
+
+```powershell
+# Content 目录 = 选题卡所在目录（开发：./.ai-signal/Content；生产：Vault/AI Signal/Content）
+python -m ai_signal feedback sync --db-path ./.ai-signal/ai_signal.db `
+  --content-dir "./.ai-signal/Content" --allow-feedback-write
+
+# 2B 时代的旧 Inbox 包（可选，同时扫）：
+python -m ai_signal feedback sync --db-path ./.ai-signal/ai_signal.db `
+  --inbox-dir "./.ai-signal/Inbox" --content-dir "./.ai-signal/Content" `
+  --allow-feedback-write
+```
+
+- 第一轮（读卡后，**可填可不填**）：decision/reason/audience/angle/usefulness；
+- 第二轮（发布几天后，**必填**）：published_url + published_at(YYYY-MM-DD)
+  + outcome（真实表现）+ lesson（一句话复盘）；
+- 两轮同落 `feedback` 表；后补第二轮 = 新增一行（旧行不动），判断演变可审计；
+- 不填 decision 的文件被跳过（skipped），坏文件跳过计数（invalid），
+  StorageError 整体回滚，绝不部分提交；
+- 欠账清单（已发布未填结果）用 Obsidian Dataview 查：
+  `published_url 有值且 outcome 为空`，零代码。
 
 ---
 
