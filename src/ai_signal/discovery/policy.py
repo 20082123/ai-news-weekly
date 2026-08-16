@@ -420,6 +420,13 @@ _POLICY_WATCHLIST = GitHubDiscoveryPolicy(
             spec={"full_name": "OleksandrChekhovskyi/hax"},
             priority=4,
         ),
+        GitHubDiscoveryProbe(
+            probe_id="watchlist-v1-r6",
+            kind="watchlist_target",
+            scope_key="ghp-watchlist-v1-r6",
+            spec={"full_name": "vava-nessa/free-coding-models"},
+            priority=5,
+        ),
     ),
     candidate_limit=20,
     research_budget=5,
