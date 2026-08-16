@@ -105,6 +105,10 @@ def render_prompt_pack(
     lines.append("- 发布后在选题卡填第二轮反馈（published_url / published_at / outcome / lesson），")
     lines.append("  对 agent 说「同步反馈」落库。")
     lines.append("")
+    lines.append("## 受众匹配自查（发前必答，这是「尝菜」那道工序）")
+    lines.append("")
+    lines.append("- %s" % platform.audience_check)
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -170,6 +174,10 @@ def render_platform_skeleton(
     lines.append("")
     for item in dossier.forbidden_claims:
         lines.append("- %s" % item)
+    lines.append("")
+    lines.append("## 受众匹配自查（发前必答，这是「尝菜」那道工序）")
+    lines.append("")
+    lines.append("- %s" % platform.audience_check)
     lines.append("")
     lines.append("## 判定备忘：%s（%s）" % (
         _DECISION_CN.get(decision.decision, decision.decision),

@@ -118,6 +118,8 @@ class PlatformDraftsTest(unittest.TestCase):
         self.assertIn("③ 之前 vs 现在：____", text)
         self.assertIn("配图模板", text)
         self.assertNotIn("<div", text)
+        self.assertIn("受众匹配自查", text)
+        self.assertIn("只能有一种解读", text)  # unambiguous-number title rule
 
     def test_skeleton_has_facts_slots_and_image_plan(self):
         event, dossier, facts, decision = self._load()
@@ -131,6 +133,7 @@ class PlatformDraftsTest(unittest.TestCase):
         self.assertIn("配图清单", text)
         self.assertIn("红框", text)
         self.assertIn("终审自查 · 禁说清单", text)
+        self.assertIn("受众匹配自查", text)
         self.assertIn("判定备忘：可直接写", text)
 
     def test_publishers_write_under_drafts(self):

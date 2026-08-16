@@ -54,9 +54,9 @@ last_updated: 2026-08-16
 | editorial_decision | 15 | 可直接写 3 事件（qwen-code/DeepSeek/Gemini）、需亲测 3、观察 6 |
 | official_announcement_candidate | 50 | 一手公告（被动备份，非关键路径） |
 | 选题卡（Vault Content/） | 5 | qwen-code + DeepSeek + Gemini + ChatGPT Business + ai-agent-book |
-| 发布 | 1 | 小红书第一条（DeepSeek 峰谷计价，2026-08-16）；自评：表达一般、配图不会搭 |
+| 发布 | 1 | 小红书第一条（DeepSeek 峰谷计价）；复盘：受众错位（②是 API 开发者，非本账号人群）→ 判定改为拒绝，保留为核验型内容样本 |
 | creator_choice | 1 | 2026-W33 “DeepSeek 涨价”（**published**，闭环转过第一轮） |
-| feedback | 3 | qwen-code 拒绝；DeepSeek 采用+outcome/lesson；中枢 adopted |
+| feedback | 4 | qwen-code 拒绝；DeepSeek 采用+outcome/lesson → 复盘拒绝（受众错位）；中枢 adopted |
 
 Golden Set：4+1 份档案（GS-01/06/07/12/21）+ 20 行候选标注表，
 仍待第一用户继续填写判定。
@@ -99,11 +99,10 @@ Golden Set：4+1 份档案（GS-01/06/07/12/21）+ 20 行候选标注表，
 
 ### Next
 
-- **V1 后的两个真实短板（来自第一条的 outcome/lesson）**：① 表达——平台稿
-  加润色流程（豆包改写并存，禁说清单原样带上）；② 配图——选题卡/成品稿
-  增加小红书配图模板与规格说明（封面图、价目表截图标注版）；
-- 几天后回填第一条的发布数据（阅读/点赞/收藏），补进 outcome 再同步一次；
-- ai-agent-book、Gemini 3.7 Flash 两张可直接写的卡排队成稿（按缺口补证据后）；
+- **真正的第一篇（受众匹配已过）**：ai-agent-book 免费中文书——②直接落在
+  「想学 AI Agent 的学生」，骨架稿+提示包已生成并填好（Drafts/），等你
+  终审后发布；
+- 几天后回填 DeepSeek 第一条的平台数据（阅读/点赞/收藏），补进 outcome 再同步一次；
 - free-coding-models：等匿名限流窗口复位后重跑 discovery/research 补管道；
 - Golden Set 继续标注。
 
@@ -116,8 +115,8 @@ Golden Set：4+1 份档案（GS-01/06/07/12/21）+ 20 行候选标注表，
 
 1. **再次来源中心化**：把已实现的 GitHub 结构套到所有概念上。控制：缺口
    路由以选题为圆心，来源只按缺口召唤。
-2. **工程完成冒充产品完成**：测试 602 项，但发布与反馈仍为 0。控制：产品
-   侧瓶颈交给用户决定（平台、第一条内容），不再加机器功能。
+2. **工程完成冒充产品完成**：测试 625 项，发布 1 条、反馈 4 行——产品验证
+   刚开始，控制：每篇发布前过「受众匹配自查」（尝菜），不再加机器功能。
 3. **发布拖过 8 月底**：管线已经完整，价值只剩“发出第一条”。控制：把
    发布动作排到一切优化之前（先完成后完善）。
 4. **营销改写冲垮事实纪律**：豆包等工具最擅长加最高级和没出处的数字。
