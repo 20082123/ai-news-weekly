@@ -143,6 +143,9 @@ def _common_fields(fm) -> dict:
         )
     usefulness = fm.get("usefulness")
     if usefulness is not None:
+        # Humans sometimes quote the number ("1" in the YAML); accept it.
+        if isinstance(usefulness, str) and usefulness.strip().isdigit():
+            usefulness = int(usefulness.strip())
         if not isinstance(usefulness, int) or isinstance(usefulness, bool):
             raise FeedbackSyncError("usefulness must be int")
         if not 1 <= usefulness <= 5:

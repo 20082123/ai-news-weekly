@@ -201,6 +201,13 @@ class TwoRoundFeedbackTest(unittest.TestCase):
         self.assertEqual(result.invalid, 1)
         self.assertEqual(len(self._rows()), 0)
 
+    def test_quoted_numeric_usefulness_accepted(self):
+        # A human wrote usefulness: "1" (quoted) - accept it as int 1.
+        self._write("x.md", _brief_fm(decision="拒绝", usefulness="1"))
+        result = self._sync()
+        self.assertEqual(result.inserted, 1)
+        self.assertEqual(self._rows()[0]["usefulness"], 1)
+
     def test_legacy_inbox_still_syncs_alongside(self):
         # Seed a legacy material pack and keep its 2B path working.
         conn = S._open(self.db)

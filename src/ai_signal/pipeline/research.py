@@ -45,6 +45,7 @@ from ..storage.research_repositories import (
     ResearchFactRepository,
 )
 from ..storage.sqlite import StorageError
+from ..textutil import strip_html_tags, strip_markdown_links
 
 
 class ResearchError(ValueError):
@@ -133,7 +134,7 @@ def attach_official_evidence(
 
 
 def _clean_external_text(text: str, cap: int) -> Tuple[str, bool]:
-    """Strip control characters and cap untrusted external text.
+    """Strip HTML, control characters and cap untrusted external text.
 
     Returns ``(cleaned, injection)``; when injection markers are found the
     text is replaced by a safe placeholder (never rendered, never executed).
@@ -142,6 +143,7 @@ def _clean_external_text(text: str, cap: int) -> Tuple[str, bool]:
     lowered = cleaned.lower()
     if any(marker in lowered for marker in _INJECTION_MARKERS):
         return "（内容含可疑注入标记，已脱敏）", True
+    cleaned = strip_markdown_links(strip_html_tags(cleaned))
     return cleaned[:cap].strip(), False
 
 

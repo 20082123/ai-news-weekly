@@ -25,6 +25,12 @@ from ..domain.models import (
     ResearchFact,
     content_brief_entity_id,
 )
+from ..textutil import strip_html_tags, strip_markdown_links
+
+
+def _clean_display(text: str) -> str:
+    """Clean external text for the human-facing card (stored rows stay raw)."""
+    return strip_markdown_links(strip_html_tags(text or ""))
 
 
 class ContentBriefError(Exception):
@@ -148,7 +154,7 @@ def _render_brief(
     lines.append("")
     if dossier.timeline:
         for item in dossier.timeline:
-            lines.append("- %s" % item)
+            lines.append("- %s" % _clean_display(item))
     else:
         lines.append("- （无明确时间线）")
     lines.append("")
@@ -156,9 +162,9 @@ def _render_brief(
     lines.append("")
     for fact in facts:
         source = "（%s）" % fact.source_url if fact.source_url else ""
-        lines.append("- [%s] %s %s" % (fact.kind, fact.text, source))
+        lines.append("- [%s] %s %s" % (fact.kind, _clean_display(fact.text), source))
     lines.append("")
-    lines.append("## 目标受众与任务")
+    lines.append("## 目标受众与任务（机器草稿，待你补到「人群+任务」）")
     lines.append("")
     lines.append("- 受众：%s" % dossier.target_audience)
     lines.append("- 任务：%s" % dossier.job_to_be_done)

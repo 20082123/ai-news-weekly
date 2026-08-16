@@ -468,6 +468,26 @@ class ContentBriefTest(unittest.TestCase):
         self.assertIn("第二轮反馈", text)
         self.assertIn("采用 / 暂存 / 拒绝", text)
 
+    def test_brief_strips_stored_html_for_display(self):
+        event, dossier, facts, decision = self._dossier_and_event()
+        facts = list(facts) + [
+            ResearchFact(
+                dossier_id=dossier.id, kind="official_claim",
+                text='README 摘要：<div align="center"><img src="badge">'
+                     "</div> 支持 CLI 与 IDE",
+                source_kind="github_readme",
+                source_url="https://github.com/x/y",
+            )
+        ]
+        path = publish_content_brief(
+            self.out, "2026-W33", event, dossier, facts, decision
+        )
+        text = path.read_text(encoding="utf-8")
+        self.assertNotIn("<div", text)
+        self.assertNotIn("<img", text)
+        self.assertIn("支持 CLI 与 IDE", text)
+        self.assertIn("目标受众与任务（机器草稿", text)
+
     def test_weird_subject_sanitized(self):
         from ai_signal.domain.models import EditorialDecision, EventCandidate
 
