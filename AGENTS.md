@@ -10,7 +10,9 @@
 2. [docs/00-PRODUCT.md](docs/00-PRODUCT.md) —— North Star 与受众；
 3. [docs/OPS.md](docs/OPS.md) —— **标准操作手册（高频动作的命令序列）**；
 4. [docs/01-ROADMAP.md](docs/01-ROADMAP.md) 与 [docs/05-DECISIONS.md](docs/05-DECISIONS.md) —— 阶段与决策；
-5. [docs/architecture.md](docs/architecture.md) / [docs/data-model.md](docs/data-model.md) —— 实现细节。
+5. [docs/06-爆款写作规范.md](docs/06-爆款写作规范.md) —— **替用户写任何平台内容前必读**
+   （五要素 + 发稿自检清单，DEC-025 模仿期起生效）；
+6. [docs/architecture.md](docs/architecture.md) / [docs/data-model.md](docs/data-model.md) —— 实现细节。
 
 ## 硬约束（违反即失败）
 
