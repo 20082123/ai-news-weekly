@@ -549,3 +549,31 @@ python -m ai_signal weekly run --db-path ./.ai-signal/ai_signal.db `
 Brief 文件写入 `<output-root>/Content/<week_key> - <subject>.md`（安全文件名、
 原子写入、不逃逸输出根目录）。体验型结论（更快/更好/更稳）只在
 `needs_testing` 且本人测试完成后才允许写进任何输出。
+
+### 官方公告传感器（2D3-B）+ Reddit/X 证据入口（Phase 4 端口）
+
+消费级 AI 变化（产品发布、定价、额度）的第一现场是官方公告，不是 GitHub：
+
+```powershell
+# 从官方 RSS/Atom 源采集一手公告候选（草稿源目录在
+# src/ai_signal/discovery/official_catalog.py，可替换）
+python -m ai_signal official collect --db-path ./.ai-signal/ai_signal.db --allow-network
+
+python -m ai_signal official list --db-path ./.ai-signal/ai_signal.db --limit 20
+```
+
+公告进入 `official_announcement_candidate`（0008），可按 `source_name:url`
+引用进 EventCandidate 或作为研究证据；`weekly run` 已自动包含这一步。
+
+Reddit/X 的用户现实证据走**手工引文入口**（agent-reach 已配置登录态时，
+由助手采集真实帖子后逐条录入；系统内不存任何登录态）：
+
+```powershell
+python -m ai_signal research add-note --db-path ./.ai-signal/ai_signal.db `
+  --event-id <id> --kind contradiction `
+  --text "用户反馈：某环境下安装失败，报证书错误。" `
+  --url "https://www.reddit.com/r/..."
+```
+
+`add-note` 不联网、原文照录、逐条绑定 URL，录入后重跑 `editorial decide`
+即产生新的判定修订（证据变化可审计）。

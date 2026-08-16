@@ -154,10 +154,14 @@ GitHub Search Result
 - **2D/2E/2F + Phase 3 代码完成**（0007 迁移：`research_dossier`/
   `research_fact`/`editorial_decision`；README/Release 只读研究客户端；
   editorial-v1 确定性门控；内容 Brief Markdown 输出；`weekly run`
-  端到端编排与 CLI）——离线验证、git 提交与真实端到端运行待环境恢复后
-  执行；
-- **待第一用户**：Watchlist/Ecosystem 清单确认；后续受控 smoke 授权；
-  Reddit/X（Phase 4）需登录态配置。
+  端到端编排与 CLI）——全部完成：579 项离线测试通过、已分阶段提交、
+  真实端到端跑通（研究队列 → 档案 → 判定 → 3 份 Brief）；
+- **2D3-B Official 传感器完成**（0008 `official_announcement_candidate` +
+  RSS 目录 + `official collect/list` CLI + weekly 集成）：真实运行一次，
+  4 源 1 失败、50 条一手公告入库；Reddit/X 证据经 `research add-note`
+  手工引文入口进档案（DEC-016）；
+- **待第一用户**：Watchlist/Ecosystem 清单确认；Reddit/X 实时采集需在
+  Chrome 安装 OpenCLI 扩展（或安装 twitter-cli/rdt-cli）。
 
 Stage A 尚未完成：Golden Set 当前只有说明性种子，尚未完成 10～20 个真实样例的
 第一用户标注；`06-STAGE-B-SPEC.md` 也必须等 Golden Set 后才能起草和确认。

@@ -306,6 +306,28 @@ GitHub 已实现，是最便宜的下一个纵切；但继续扩展 GitHub 会�
 - 首批 Golden Set 档案已作为 EventCandidate 种子写入开发库；
 - 事件确认 Gate（confirmed/unresolved/discarded）与 Editorial 留给 2E。
 
+## DEC-016：官方公告是下一个传感器；Reddit/X 证据经手工引文入口进档案
+
+- **日期**：2026-08-15
+- **状态**：`accepted`
+
+### 决定
+
+1. 2D3-B 落地 Official 传感器：官方 RSS/Atom 目录（`official_catalog.py`，草稿源）
+   采集一手公告候选入 `official_announcement_candidate`（0008），可引用进
+   EventCandidate 与研究档案；
+2. Phase 4 的 Reddit/X 不建独立抓取器：系统提供 `research add-note` 手工引文
+   入口（原文照录 + 逐条 URL + kind），真实帖子由助手经 agent-reach 后端采集后
+   录入；登录态只在 agent-reach 侧，永不进入本系统；
+3. 依据：战略复盘确认受众关心的消费级变化第一现场是官方公告；用户现实证据
+   是小样本高价值信号，按需采集即可，不做提前投资。
+
+### 后果与代价
+
+- `official` CLI（collect/list）与 `weekly run` 增加官方采集步骤（失败可见降级）；
+- Reddit/X 的实时可用性依赖 agent-reach 后端（Chrome + OpenCLI 扩展或
+  twitter-cli/rdt-cli 登录态）。
+
 ## 待第一用户复核的 Proposed Decisions
 
 完成 Golden Set 时，应一起确认或修改：

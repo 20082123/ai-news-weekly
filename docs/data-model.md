@@ -481,6 +481,25 @@ not produced by `editorial-v1`); `reason_codes` are stable codes:
 `first_party_change_evidence`, `experience_claim_detected`, `thin_evidence`,
 `no_first_party_change_evidence`.
 
+## Phase 2D3-B: official announcement candidates (migration 0008)
+
+Migration `0008_official_announcement.sql` adds the Official sensor table
+(purely additive; 0001-0007 are immutable). Consumer-level AI changes
+surface first on official channels, not GitHub.
+
+### `official_announcement_candidate`
+
+One first-party announcement candidate per `(source_name, url)` (`UNIQUE`;
+the id is `deterministic_id("official-announcement", source_name, url)`).
+Fields: `source_name` (catalog label), `title`, `url` (clean https,
+credentials rejected), `published_at` (feed timestamp), `summary` (capped,
+tag-stripped untrusted excerpt), `status` (`new | researched | rejected`).
+Collected from the draft RSS/Atom catalog in
+`src/ai_signal/discovery/official_catalog.py`; failed feeds degrade
+visibly and unsafe entry links are skipped. Manual Reddit/X/user-reality
+evidence enters dossiers through `research add-note` as `research_fact`
+rows with `source_kind = manual` (verbatim quotes, one URL each).
+
 ## Data retention and the credentials-must-not-enter principle
 
 * Raw signals are immutable: the pipeline appends, it never edits or deletes

@@ -246,6 +246,41 @@ class EditorialGateTest(unittest.TestCase):
             conn.close()
         self.assertEqual(len(rows), 2)
 
+    def test_add_note_cli_records_manual_evidence(self):
+        import io
+
+        from ai_signal.cli import main
+
+        self._seed_dossier([
+            ("fact", "发布 v0.3.0（2026-08-12）：" + "内容" * 30,
+             "github_release", "https://github.com/x/y/releases/tag/v0.3.0"),
+        ])
+        out = io.StringIO()
+        code = main(
+            [
+                "research", "add-note",
+                "--db-path", self.db,
+                "--event-id", "e" * 64,
+                "--text", "用户反馈：某环境下安装失败，报证书错误。",
+                "--kind", "contradiction",
+                "--url", "https://www.reddit.com/r/LocalLLaMA/comments/example",
+            ],
+            out,
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("fact_id:", out.getvalue())
+        conn = S._open(self.db)
+        try:
+            rows = conn.execute(
+                "SELECT kind, source_kind, source_url FROM research_fact "
+                "WHERE kind = 'contradiction'"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source_kind"], "manual")
+        self.assertIn("reddit.com", rows[0]["source_url"])
+
     def test_official_evidence_updates_decision(self):
         from ai_signal.pipeline.research import attach_official_evidence
         from ai_signal.sources.github_rest import HttpResponse
