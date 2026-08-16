@@ -319,6 +319,9 @@ class WeeklyPipelineTest(unittest.TestCase):
         self.assertIn("editorial: needs_testing", text)
         self.assertIn("禁说清单", text)
         self.assertIn("本人测试计划", text)
+        # The four-question angle section is part of the draft-ready brief.
+        self.assertIn("角度（四问翻译草稿）", text)
+        self.assertIn("标题草稿（人工）", text)
 
     def test_weekly_requires_network(self):
         from ai_signal.pipeline.collect import CollectionPolicyError

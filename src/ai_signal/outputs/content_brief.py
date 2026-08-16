@@ -65,6 +65,40 @@ def _render_brief(
     lines.append("")
     lines.append("理由：%s" % "、".join(decision.reason_codes))
     lines.append("")
+
+    # --- 角度（四问翻译草稿）：把零件翻成"具体的人、具体的活儿" ----------
+    # 机器只能填它从事实里能推出的部分；②③的"具体到人+前后数字"是核心手艺，
+    # 必须人工完成——这正是从零件到初稿的那一步。
+    has_prev_release = any(
+        f.kind == "fact" and f.text.startswith("上一版本") for f in facts
+    )
+    if decision.decision == "ready_to_write":
+        action_draft = "现在可以报道发生了什么；「去用 / 等等看 / 不用管」三选一（待人工定）。"
+        angle_draft = "报道向：把①讲清楚 + 给读者一个行动建议，可直接改写成初稿。"
+    elif decision.decision == "needs_testing":
+        action_draft = "先按下方测试计划亲测，再写体验结论；在此之前只能写「官方宣称」。"
+        angle_draft = "亲测向：「我替你把 %s 试了一遍」（成与翻车都是素材，需先完成测试计划）。" % event.subject
+    else:
+        action_draft = "不用管 / 观察：证据不足，等下一轮快照再看。"
+        angle_draft = "踩刹车向：「%s 看起来新鲜，但我替你查过了，先别急着用」。" % event.subject
+
+    lines.append("## 角度（四问翻译草稿）")
+    lines.append("")
+    lines.append("- ① 变化是什么（无术语版）：%s" % dossier.summary_judgment)
+    lines.append("- ② 谁的任务变了：%s（待人工补到「人群+任务」级别）"
+                % dossier.target_audience)
+    if has_prev_release:
+        lines.append("- ③ 之前 vs 现在：有上一版本对比（见时间线）；")
+        lines.append("  具体的「省多少时间/钱/步骤」数字待人工补——这是最值钱的一句。")
+    else:
+        lines.append("- ③ 之前 vs 现在：待人工补（前后对比数字，最值钱的一句）。")
+    lines.append("- ④ 现在该做什么：%s" % action_draft)
+    lines.append("")
+    lines.append("机器建议角度：%s" % angle_draft)
+    lines.append("")
+    lines.append("标题草稿（人工）：____")
+    lines.append("")
+
     lines.append("## 发生了什么（时间线）")
     lines.append("")
     if dossier.timeline:
