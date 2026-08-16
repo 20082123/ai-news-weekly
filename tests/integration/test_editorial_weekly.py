@@ -452,6 +452,10 @@ class ContentBriefTest(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertIn("editorial: ready_to_write", text)
         self.assertIn("api-docs.deepseek.com", text)
+        # Chinese-first rendering for the human (DEC-018 follow-up).
+        self.assertIn("类型：价格与获取门槛", text)
+        self.assertIn("## 能不能写：可直接写", text)
+        self.assertIn("有一手变化证据", text)
         # DEC-018: two-round feedback fields ride on every brief.
         self.assertIn("kind: content-brief", text)
         self.assertIn("brief_id:", text)
@@ -462,6 +466,7 @@ class ContentBriefTest(unittest.TestCase):
             self.assertIn("%s: null" % field, text)
         self.assertIn("第一轮反馈", text)
         self.assertIn("第二轮反馈", text)
+        self.assertIn("采用 / 暂存 / 拒绝", text)
 
     def test_weird_subject_sanitized(self):
         from ai_signal.domain.models import EditorialDecision, EventCandidate

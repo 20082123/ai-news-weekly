@@ -45,6 +45,17 @@ _TEXT_MAX = 200
 _OUTCOME_MAX = 2000
 _WEEK_KEY_RE = re.compile(r"^\d{4}-W\d{2}$")
 
+# Humans fill the card in Chinese; the database keeps the canonical English
+# vocabulary (AGENTS.md). Translation happens only here, at the boundary.
+_DECISION_ALIASES = {
+    "adopted": "adopted",
+    "parked": "parked",
+    "rejected": "rejected",
+    "采用": "adopted",
+    "暂存": "parked",
+    "拒绝": "rejected",
+}
+
 
 class FeedbackSyncError(Exception):
     """Raised when a feedback file is invalid and must be skipped."""
@@ -125,8 +136,11 @@ def _common_fields(fm) -> dict:
     decision = fm.get("decision")
     if decision is None:
         return None  # caller treats as "skipped": nothing to record yet
-    if decision not in ("adopted", "parked", "rejected"):
-        raise FeedbackSyncError("invalid decision")
+    decision = _DECISION_ALIASES.get(decision)
+    if decision is None:
+        raise FeedbackSyncError(
+            "invalid decision (use 采用/暂存/拒绝 or adopted/parked/rejected)"
+        )
     usefulness = fm.get("usefulness")
     if usefulness is not None:
         if not isinstance(usefulness, int) or isinstance(usefulness, bool):

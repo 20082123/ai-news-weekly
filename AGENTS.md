@@ -19,7 +19,8 @@
 - 凭据永不落库/落码/落日志；raw query 只存 hash（`query_sha256`/`spec_hash`）；
 - 联网必须显式 `--allow-network`；写文件必须 `--allow-output-write`（缺省建库/建文件前拒绝，退出码 4）；
 - **不执行 git add/commit/push/merge/rebase/reset/checkout，除非第一用户明确批准**；
-- 不写真实 Obsidian Vault（`C:\Users\HP\Documents\AI-Signals`）除非另行批准；
+- 真实 Obsidian Vault（`C:\Users\HP\Documents\AI-Signals`）**已获批准写入范围
+  （2026-08-16）仅限 `AI Signal/` 子树**；Vault 其他位置仍不得写入；
 - Reddit/X 登录态只存在于 agent-reach（OpenCLI/twitter-cli/rdt-cli），系统内不存任何登录态；
 - 不在系统里接 LLM 写稿：机器出事实/零件/判定草案，初稿由外部模型按提示包生成、人终审。
 
@@ -35,7 +36,8 @@
 
 - qualification：`research / watch / reject`
 - editorial：`ready_to_write / needs_testing / watch / reject`
-- 人工反馈：`adopted / parked / rejected`
+- 人工反馈：`adopted / parked / rejected`（用户在卡上填中文「采用 / 暂存 / 拒绝」，
+  sync 边界自动翻译，库里永远是英文）
 
 ## 与第一用户的交互
 

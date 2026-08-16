@@ -180,6 +180,27 @@ class TwoRoundFeedbackTest(unittest.TestCase):
         self.assertEqual(result.inserted, 1)
         self.assertEqual(self._rows()[0]["decision"], "rejected")
 
+    def test_chinese_decision_translated_to_canonical(self):
+        # Humans fill the card in Chinese; the DB keeps adopted/parked/rejected.
+        self._write("x.md", _brief_fm(decision="采用", reason="数字硬，值得写"))
+        result = self._sync()
+        self.assertEqual(result.inserted, 1)
+        self.assertEqual(self._rows()[0]["decision"], "adopted")
+        self._write("x.md", _brief_fm(decision="暂存"))
+        self._sync()
+        self._write("x.md", _brief_fm(decision="拒绝"))
+        self._sync()
+        self.assertEqual(
+            sorted(r["decision"] for r in self._rows()),
+            ["adopted", "parked", "rejected"],
+        )
+
+    def test_unknown_decision_word_invalid(self):
+        self._write("x.md", _brief_fm(decision="还行"))
+        result = self._sync()
+        self.assertEqual(result.invalid, 1)
+        self.assertEqual(len(self._rows()), 0)
+
     def test_legacy_inbox_still_syncs_alongside(self):
         # Seed a legacy material pack and keep its 2B path working.
         conn = S._open(self.db)

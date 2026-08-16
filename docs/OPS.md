@@ -142,7 +142,8 @@ python -m ai_signal feedback sync --db-path ./.ai-signal/ai_signal.db `
   --allow-feedback-write
 ```
 
-- 第一轮（读卡后，**可填可不填**）：decision/reason/audience/angle/usefulness；
+- 第一轮（读卡后，**可填可不填**）：decision 填中文「采用 / 暂存 / 拒绝」
+  （sync 自动翻译成 adopted/parked/rejected），可加 reason/audience/angle/usefulness；
 - 第二轮（发布几天后，**必填**）：published_url + published_at(YYYY-MM-DD)
   + outcome（真实表现）+ lesson（一句话复盘）；
 - 两轮同落 `feedback` 表；后补第二轮 = 新增一行（旧行不动），判断演变可审计；

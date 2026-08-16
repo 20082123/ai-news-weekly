@@ -33,6 +33,28 @@ class ContentBriefError(Exception):
 
 _INVALID_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
+# Human-facing Chinese labels; the machine values (stored in the database and
+# the frontmatter) stay English and never change.
+_SIGNAL_TYPE_CN = {
+    "capability_change": "能力变化",
+    "tool_workflow_change": "工具/工作流变化",
+    "user_reality": "用户现实",
+    "economics_access": "价格与获取门槛",
+    "ecosystem_market_shift": "生态/市场格局变化",
+}
+_EDITORIAL_CN = {
+    "ready_to_write": "可直接写",
+    "needs_testing": "需亲测",
+    "watch": "先观察",
+    "reject": "不写",
+}
+_REASON_CN = {
+    "first_party_change_evidence": "有一手变化证据（官方发布/版本记录）",
+    "experience_claim_detected": "含体验宣称，未经本人验证",
+    "thin_evidence": "证据偏薄",
+    "no_first_party_change_evidence": "没有一手变化证据",
+}
+
 
 def _safe_stem(text: str, cap: int = 72) -> str:
     stem = _INVALID_FILENAME_RE.sub("-", text or "brief").strip()
@@ -60,28 +82,33 @@ def _render_brief(
     lines.append("brief_id: %s" % content_brief_entity_id(week_key, event.id))
     lines.append("signal_type: %s" % event.signal_type)
     lines.append("editorial: %s" % decision.decision)
-    lines.append("# 第一轮反馈（读卡后判断选题，可填可不填）")
-    lines.append("decision: null        # adopted / parked / rejected")
-    lines.append("reason: null          # 为什么，<=500字")
-    lines.append("audience: null        # 你判断的真实受众")
-    lines.append("angle: null           # 你实际用的角度")
-    lines.append("usefulness: null      # 1-5")
-    lines.append("# 第二轮反馈（发布几天后，必填）")
+    lines.append("# ===== 第一轮反馈：读卡后判断这条值不值得写（可填可不填）=====")
+    lines.append("decision: null        # 三选一：采用 / 暂存 / 拒绝")
+    lines.append("reason: null          # 为什么这么判，不超过 500 字")
+    lines.append("audience: null        # 你判断的真实受众是谁")
+    lines.append("angle: null           # 你实际想用的角度")
+    lines.append("usefulness: null      # 有用程度 1-5 分")
+    lines.append("# ===== 第二轮反馈：发布几天后补真实结果（必填）=====")
     lines.append("published_url: null   # 发布后的 https 链接")
-    lines.append("published_at: null    # 发布日期 YYYY-MM-DD")
-    lines.append("outcome: null         # 表现如何：阅读/点赞/收藏/评论，捡你在乎的写")
-    lines.append("lesson: null          # 一句话复盘：下次改什么")
+    lines.append("published_at: null    # 发布日期，格式 2026-08-20")
+    lines.append("outcome: null         # 真实表现：阅读/点赞/收藏/评论，捡你在乎的写")
+    lines.append("lesson: null          # 一句话复盘：下次哪里改")
     lines.append("---")
     lines.append("")
     lines.append("# 选题卡：%s" % event.subject)
+    lines.append("")
+    lines.append("类型：%s" % _SIGNAL_TYPE_CN.get(event.signal_type, event.signal_type))
     lines.append("")
     lines.append("## 一句话判断（机器草案）")
     lines.append("")
     lines.append(dossier.summary_judgment)
     lines.append("")
-    lines.append("## Editorial（%s）" % decision.decision)
+    lines.append("## 能不能写：%s" % _EDITORIAL_CN.get(
+        decision.decision, decision.decision))
     lines.append("")
-    lines.append("理由：%s" % "、".join(decision.reason_codes))
+    lines.append("理由：%s" % "、".join(
+        _REASON_CN.get(code, code) for code in decision.reason_codes
+    ))
     lines.append("")
 
     # --- 角度（四问翻译草稿）：把零件翻成"具体的人、具体的活儿" ----------
@@ -165,13 +192,16 @@ def _render_brief(
     lines.append("- 抖音：时间线第一项做口播开场，禁说清单做结尾免责。")
     lines.append("- 全部平台：体验型结论只有本人测试完成后才能加入。")
     lines.append("")
-    lines.append("## 反馈（人填，两轮）")
+    lines.append("## 反馈怎么填（人填，两轮，全中文）")
     lines.append("")
-    lines.append("- 第一轮（读卡后，可填可不填）：frontmatter 里 decision 选 "
-                "adopted/parked/rejected，可加 reason/audience/angle/usefulness。")
-    lines.append("- 第二轮（发布几天后，必填）：published_url + published_at(YYYY-MM-DD) "
-                "+ outcome（真实表现）+ lesson（一句话复盘）。")
-    lines.append("- 填完跑：feedback sync --content-dir <本目录>（由代理执行），反馈落库。")
+    lines.append("- 第一轮（读卡后，可填可不填）：卡最上方 decision 填 "
+                "「采用」或「暂存」或「拒绝」，reason 写为什么，"
+                "usefulness 打 1-5 分；不填就直接保存，不算错。")
+    lines.append("- 第二轮（发布几天后，必填）：published_url 放发布链接、"
+                "published_at 填日期（如 2026-08-20）、outcome 写真实表现"
+                "（阅读/点赞/收藏/评论）、lesson 写一句话复盘。")
+    lines.append("- 填完对任意 agent 说一句「同步反馈」即可落库；"
+                "中文会自动转成系统内部用语，你不用管英文。")
     lines.append("")
     return "\n".join(lines)
 
