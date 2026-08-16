@@ -1,5 +1,6 @@
 """Integration tests for the creator-centric hub (choice / gaps / feedback)."""
 
+import io
 import os
 import pathlib
 import shutil
@@ -9,6 +10,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "src"))
 
+from ai_signal.cli import main  # noqa: E402
 from ai_signal.domain.models import (  # noqa: E402
     ResearchDossier,
     ResearchFact,
@@ -150,6 +152,52 @@ class CreatorLoopTest(unittest.TestCase):
         self.assertEqual((row["decision"], row["usefulness"]),
                          ("adopted", 5))
         self.assertEqual(status, "published")
+
+
+class CreatorChoiceCliTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="ai_creator_cli_")
+        self.db = os.path.join(self.tmp, "test.db")
+        S.initialize_database(self.db)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, argv):
+        out = io.StringIO()
+        code = main(argv, out)
+        return code, out.getvalue()
+
+    def test_list_without_week_key_lists_all_weeks(self):
+        conn = S._open(self.db)
+        conn.execute("BEGIN")
+        from ai_signal.pipeline.creator import record_choice
+
+        record_choice(conn, "2026-W32", "上周选题")
+        record_choice(conn, "2026-W33", "本周选题")
+        conn.execute("COMMIT")
+        conn.close()
+        code, text = self._run(["choice", "list", "--db-path", self.db])
+        self.assertEqual(code, 0)
+        self.assertIn("2026-W32", text)
+        self.assertIn("上周选题", text)
+        self.assertIn("2026-W33", text)
+        self.assertIn("本周选题", text)
+
+    def test_pick_then_gaps_roundtrip(self):
+        code, text = self._run([
+            "choice", "pick", "--db-path", self.db,
+            "--week-key", "2026-W33", "--subject", "DeepSeek 涨价",
+        ])
+        self.assertEqual(code, 0)
+        self.assertIn("status: chosen", text)
+        code, text = self._run([
+            "choice", "gaps", "--db-path", self.db,
+            "--week-key", "2026-W33", "--subject", "DeepSeek 涨价",
+        ])
+        self.assertEqual(code, 0)
+        self.assertIn("证据缺口清单", text)
+        self.assertIn("official_confirmation", text)
 
 
 if __name__ == "__main__":

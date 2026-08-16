@@ -1576,7 +1576,7 @@ def cmd_choice(args, out) -> int:
     )
     from .storage import sqlite as sqlite_storage
 
-    if not _WEEK_KEY_RE.match(args.week_key):
+    if args.week_key is not None and not _WEEK_KEY_RE.match(args.week_key):
         out.write("invalid week key: expected YYYY-Www\n")
         return EXIT_CONFIG_ERROR
     if not Path(args.db_path).exists():
@@ -1587,9 +1587,6 @@ def cmd_choice(args, out) -> int:
         conn = sqlite_storage._open(args.db_path)
         try:
             repo = CreatorChoiceRepository(conn)
-            choices = [
-                c for c in repo.list(args.week_key) if c.subject == args.subject
-            ]
 
             if args.choice_command == "pick":
                 conn.execute("BEGIN")
@@ -1608,6 +1605,10 @@ def cmd_choice(args, out) -> int:
                 for row in rows:
                     out.write("[%s] %s | %s\n" % (row.week_key, row.status, row.subject))
                 return EXIT_OK
+
+            choices = [
+                c for c in repo.list(args.week_key) if c.subject == args.subject
+            ]
 
             if not choices:
                 out.write("no choice for this week/subject; run `choice pick` first\n")
