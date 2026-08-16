@@ -92,8 +92,9 @@ Golden Set：4+1 份档案（GS-01/06/07/12/21）+ 20 行候选标注表，
 
 ### Next
 
-- **第一用户决定**：发布平台；第一条内容写什么（ai-agent-book 初稿已批准
-  可发，等平台）；批准真实 Vault 首次写入路径；
+- **发布路径已定（DEC-019）**：小红书先行、初稿并存（agent 底稿 + 豆包改写）、
+  复制粘贴发布；第一篇 = DeepSeek 涨价（今晚 12 点北京时间生效，稿已就绪：
+  Vault `AI Signal/Drafts/2026-W33-DeepSeek-小红书稿.md`）；
 - 发布后由用户填两轮反馈 → `feedback sync` 落库，闭环第一次走通；
 - free-coding-models：等匿名限流窗口复位后重跑 discovery/research 补管道；
 - Golden Set 继续标注。
