@@ -281,6 +281,76 @@ class EditorialGateTest(unittest.TestCase):
         self.assertEqual(rows[0]["source_kind"], "manual")
         self.assertIn("reddit.com", rows[0]["source_url"])
 
+    def test_add_note_auto_creates_dossier_for_official_only_event(self):
+        # DEC-018: an event with no dossier (e.g. official-only) gets its
+        # baseline dossier created by add-note/add-evidence, idempotently.
+        import io
+
+        from ai_signal.cli import main
+
+        conn = S._open(self.db)
+        conn.execute("BEGIN")
+        conn.execute(
+            "INSERT INTO event_candidate (id, signal_type, subject, "
+            "change_summary, affected_audience, work_impact_hypothesis, "
+            "missing_evidence, research_priority, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("e" * 64, "economics_access", "DeepSeek 涨价", "峰谷计价",
+             "API 开发者", "成本重算", "[]", 90, TS, TS),
+        )
+        conn.execute("COMMIT")
+        conn.close()
+
+        out = io.StringIO()
+        code = main(
+            [
+                "research", "add-note",
+                "--db-path", self.db,
+                "--event-id", "e" * 64,
+                "--text", "官方价目：off-peak $0.66/$1.98，peak $1.32/$3.96。",
+                "--kind", "official_claim",
+                "--url", "https://api-docs.deepseek.com/quick_start/pricing",
+            ],
+            out,
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("fact_id:", out.getvalue())
+        conn = S._open(self.db)
+        try:
+            dossier_count = conn.execute(
+                "SELECT COUNT(*) FROM research_dossier WHERE event_candidate_id = ?",
+                ("e" * 64,),
+            ).fetchone()[0]
+            fact_count = conn.execute(
+                "SELECT COUNT(*) FROM research_fact"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(dossier_count, 1)
+        self.assertEqual(fact_count, 1)
+
+        # Second note attaches to the SAME dossier (no duplicate).
+        code = main(
+            [
+                "research", "add-note",
+                "--db-path", self.db,
+                "--event-id", "e" * 64,
+                "--text", "第二条补充事实。",
+                "--kind", "fact",
+            ],
+            io.StringIO(),
+        )
+        self.assertEqual(code, 0)
+        conn = S._open(self.db)
+        try:
+            dossier_count = conn.execute(
+                "SELECT COUNT(*) FROM research_dossier WHERE event_candidate_id = ?",
+                ("e" * 64,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(dossier_count, 1)
+
     def test_official_evidence_updates_decision(self):
         from ai_signal.pipeline.research import attach_official_evidence
         from ai_signal.sources.github_rest import HttpResponse

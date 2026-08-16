@@ -50,12 +50,12 @@ last_updated: 2026-08-16
 | github_discovery_run | 9 | 四车道策略真实采集（含一次全量限流，失败可见） |
 | github_candidate_selection | 351 / 排队 38 | 候选评估与队列 |
 | event_candidate | 38 | 含 DeepSeek V4 API(90)、Gemini 3.7 Flash(70)、ChatGPT Business(65) |
-| research_dossier | 9 | 档案（事实 32 条：github 30 + manual 2 条 Reddit） |
-| editorial_decision | 10 | ready_to_write 2 / needs_testing 3 / watch 5（含修订） |
+| research_dossier | 12 | 档案（事实 40+：官方页/GitHub/manual） |
+| editorial_decision | 15 | 可直接写 3 事件（qwen-code/DeepSeek/Gemini）、需亲测 3、观察 6 |
 | official_announcement_candidate | 50 | 一手公告（被动备份，非关键路径） |
-| 选题卡（Content/） | 3 | hax、QwenLM-qwen-code、openai-agents-python |
-| creator_choice | 1 | 2026-W33 “DeepSeek 涨价”（chosen，缺口清单已生成） |
-| feedback | 0 | 两轮反馈通道刚接通（DEC-018），等第一条内容 |
+| 选题卡（Vault Content/） | 5 | qwen-code + DeepSeek + Gemini + ChatGPT Business + ai-agent-book |
+| creator_choice | 1 | 2026-W33 “DeepSeek 涨价”（已研究出卡，可直接写） |
+| feedback | 1 | 第一条真人反馈：qwen-code 拒绝（“看不懂，价值不高这种不能判断受众的”） |
 
 Golden Set：4+1 份档案（GS-01/06/07/12/21）+ 20 行候选标注表，
 仍待第一用户继续填写判定。

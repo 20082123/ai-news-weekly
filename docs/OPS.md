@@ -63,7 +63,7 @@ python -m ai_signal event-candidate list --db-path ./.ai-signal/ai_signal.db
 python -m ai_signal research build --db-path ./.ai-signal/ai_signal.db `
   --event-id <event_id> --allow-network
 
-# 官方一手页补证据（2D3）
+# 官方一手页补证据（2D3；事件还没有档案时自动建档——DEC-018 按需查证）
 python -m ai_signal research add-evidence --db-path ./.ai-signal/ai_signal.db `
   --event-id <event_id> --url "https://官方公告页" --allow-network
 
@@ -74,6 +74,9 @@ python -m ai_signal editorial decide --db-path ./.ai-signal/ai_signal.db --event
 python -m ai_signal content brief --db-path ./.ai-signal/ai_signal.db `
   --event-id <event_id> --week-key 2026-W33 `
   --output-root ./.ai-signal --allow-output-write
+
+# agent 补 ②③ 草案：把「受众+前后对比数字+标题」写进卡的草稿区
+# （系统只出零件和 ①④；②③ 由 agent 按事实拟稿、用户终审——见动作 6）
 
 # 查看档案全文
 python -m ai_signal research show --db-path ./.ai-signal/ai_signal.db --event-id <event_id>

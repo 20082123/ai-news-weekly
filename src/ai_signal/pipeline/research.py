@@ -74,6 +74,59 @@ _MAX_REFS = 3  # bound network requests per dossier
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
+def ensure_dossier(
+    conn,
+    event_id: str,
+    *,
+    clock: Optional[Callable[[], Any]] = None,
+) -> ResearchDossier:
+    """Create a baseline dossier for an event if none exists (idempotent).
+
+    DEC-018: official sites are an on-demand dictionary, so official-only
+    events (no GitHub refs) get their dossier container here and then grow
+    facts via ``add-evidence``/``add-note``. The baseline carries the
+    event's own audience/impact fields - honest placeholders when the human
+    has not filled them in yet.
+    """
+    ts = clock if clock is not None else now_utc
+    event = EventCandidateRepository(conn).get(event_id)
+    if event is None:
+        raise ResearchError("unknown event")
+    dossier_repo = ResearchDossierRepository(conn)
+    existing = dossier_repo.list_for_event(event_id)
+    if existing:
+        return existing[0]
+    bundle = sha256_hex(
+        json.dumps(
+            {"event": event_id, "facts": []},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    dossier = ResearchDossier(
+        event_candidate_id=event_id,
+        summary_judgment="机器草案：%s 的官方事实待按需查证后补充。" % event.subject,
+        timeline=(),
+        target_audience=event.affected_audience or "待人工确认",
+        job_to_be_done=event.work_impact_hypothesis or "待人工确认",
+        limits_unknowns=("证据未开始采集",),
+        forbidden_claims=(
+            "爆火/快速增长（无时间序列证据）",
+            "更好用/更稳/提效（未实测）",
+            "普通用户普遍采用（仅单一来源）",
+        ),
+        needs_testing=False,
+        test_plan=(),
+        bundle_hash=bundle,
+        created_at=ts(),
+        updated_at=ts(),
+    )
+    stored = dossier_repo.insert_or_get(dossier)
+    if stored is None:  # pragma: no cover - defensive
+        raise StorageError("dossier ensure failed")
+    return stored
+
+
 def attach_official_evidence(
     conn,
     dossier_id: str,

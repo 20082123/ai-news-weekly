@@ -1187,6 +1187,7 @@ def cmd_research(args, out) -> int:
 
     if args.research_command == "add-note":
         from .domain.models import ResearchFact
+        from .pipeline.research import ensure_dossier
         from .storage.research_repositories import ResearchFactRepository
 
         if not _hex64(args.event_id):
@@ -1199,13 +1200,10 @@ def cmd_research(args, out) -> int:
             sqlite_storage.initialize_database(args.db_path)
             conn = sqlite_storage._open(args.db_path)
             try:
-                dossiers = ResearchDossierRepository(conn).list_for_event(args.event_id)
-                if not dossiers:
-                    out.write("no dossier for this event\n")
-                    return EXIT_CONFIG_ERROR
                 conn.execute("BEGIN")
+                dossier = ensure_dossier(conn, args.event_id)
                 fact = ResearchFactRepository(conn).insert_or_get(ResearchFact(
-                    dossier_id=dossiers[0].id,
+                    dossier_id=dossier.id,
                     kind=args.kind,
                     text=args.text,
                     source_kind="manual",
@@ -1231,7 +1229,7 @@ def cmd_research(args, out) -> int:
         return EXIT_OK
 
     if args.research_command == "add-evidence":
-        from .pipeline.research import attach_official_evidence
+        from .pipeline.research import attach_official_evidence, ensure_dossier
         from .sources.official_http import OfficialHttpError
 
         if not _hex64(args.event_id):
@@ -1244,14 +1242,11 @@ def cmd_research(args, out) -> int:
             sqlite_storage.initialize_database(args.db_path)
             conn = sqlite_storage._open(args.db_path)
             try:
-                dossiers = ResearchDossierRepository(conn).list_for_event(args.event_id)
-                if not dossiers:
-                    out.write("no dossier for this event\n")
-                    return EXIT_CONFIG_ERROR
                 conn.execute("BEGIN")
+                dossier = ensure_dossier(conn, args.event_id)
                 fact = attach_official_evidence(
                     conn,
-                    dossiers[0].id,
+                    dossier.id,
                     args.url,
                     allow_network=bool(args.allow_network),
                     timeout_seconds=args.timeout,
